@@ -1,0 +1,16 @@
+# local data / scratch
+sample_logs/
+*.jsonl
+~/.tokencast_prices.json
+.tokencast_prices.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

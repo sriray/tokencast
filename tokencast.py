@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""
+TokenCast - predict what an agentic coding task will COST and how LONG it takes,
+so you can build software estimates and plan timelines in the metered era.
+
+Estimation used to be a human sizing a ticket. That no longer predicts the bill:
+a Microsoft/Stanford study found human-rated difficulty only weakly tracks actual
+token cost, and the same task can vary up to 30x. So TokenCast does not ask you to
+guess. It reads the session logs your coding agent already writes to disk, learns
+what tasks *like the one you're planning* have actually cost (and taken) before,
+and returns a forecast as a RANGE -- p50/p90/p95 -- plus a sprint/project total.
+
+`forecast` is the point. `report` (spend attribution) is a secondary view; tools
+like ccusage already do attribution well. The novel half is looking forward.
+
+Today it targets Claude Code's JSONL transcripts (~/.claude/projects). The deeper
+point: this took an afternoon, and the providers -- who hold the only accurate,
+cross-customer telemetry -- could ship this as a "cost & time preview" inside plan
+mode tomorrow, so every estimate starts from data instead of a guess.
+
+No third-party dependencies. Python 3.8+.
+
+Usage:
+    python tokencast.py demo --out ./sample_logs                 # generate fake logs
+    python tokencast.py forecast ./sample_logs --files 8 --tools 30   # estimate one task
+    python tokencast.py forecast ./sample_logs --files 8 --tools 30 --count 12  # a sprint
+    python tokencast.py forecast ~/.claude/projects --files 12   # on your real logs
+    python tokencast.py report ./sample_logs                     # (secondary) past spend
+"""
+
+import argparse, glob, json, math, os, random, statistics, sys
+from collections import defaultdict
+
+# --- Pricing (USD per 1M tokens). VERIFY against platform.claude.com/docs pricing;
+#     these reflect rates as of mid-2026 and WILL drift. Editing this is the point. ---
+PRICING = {
+    "opus":   {"input": 5.0,  "output": 25.0},   # Opus 4.7 / 4.8
+    "sonnet": {"input": 3.0,  "output": 15.0},   # Sonnet 4.6
+    "haiku":  {"input": 1.0,  "output": 5.0},    # Haiku 4.5
+}
+CACHE_WRITE_MULT = 1.25   # cache_creation_input_tokens billed at 1.25x base input (5-min cache)
+CACHE_READ_MULT  = 0.10   # cache_read_input_tokens billed at 0.10x base input (90% off)
+FILE_TOOLS = {"Edit", "Write", "Read", "MultiEdit", "NotebookEdit"}
+
+# --- Optional: pull current prices from the community LiteLLM cost map. Anthropic
+#     publishes no machine-readable feed, so this is the de-facto source (day-0 updated).
+#     Falls back to a local cache, then to the built-in defaults above. ---
+LITELLM_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+PRICE_CACHE = os.path.expanduser("~/.tokencast_prices.json")
+
+
+def _family_best(j, fam):
+    """Pick the representative (priciest, i.e. current) entry for a model family."""
+    best = None
+    for k, v in j.items():
+        if not isinstance(v, dict):
+            continue
+        prov = v.get("litellm_provider", "")
+        if prov and prov != "anthropic":
+            continue
+        if fam not in k.lower():
+            continue
+        ic, oc = v.get("input_cost_per_token"), v.get("output_cost_per_token")
+        if not isinstance(ic, (int, float)) or not isinstance(oc, (int, float)):
+            continue
+        if best is None or ic > best.get("input_cost_per_token", 0):
+            best = v
+    return best
+
+
+def _apply_price_data(data):
+    global CACHE_WRITE_MULT, CACHE_READ_MULT
+    for fam, vals in data.get("models", {}).items():
+        if fam in PRICING:
+            PRICING[fam] = vals
+    if "cw" in data:
+        CACHE_WRITE_MULT = data["cw"]
+    if "cr" in data:
+        CACHE_READ_MULT = data["cr"]
+
+
+def refresh_prices(verbose=True):
+    """Fetch live prices; on failure use cache; on failure of that, keep defaults."""
+    import urllib.request, datetime
+    try:
+        with urllib.request.urlopen(LITELLM_URL, timeout=15) as r:
+            j = json.loads(r.read().decode())
+    except Exception as ex:
+        if os.path.exists(PRICE_CACHE):
+            try:
+                data = json.load(open(PRICE_CACHE))
+                _apply_price_data(data)
+                if verbose:
+                    print(f"(live fetch failed: {ex}; using cached prices from {data.get('_fetched','?')})",
+                          file=sys.stderr)
+                return
+            except Exception:
+                pass
+        if verbose:
+            print(f"(live fetch failed: {ex}; using built-in defaults)", file=sys.stderr)
+        return
+    data = {"_fetched": datetime.date.today().isoformat(), "models": {}}
+    for fam in ("opus", "sonnet", "haiku"):
+        b = _family_best(j, fam)
+        if not b:
+            continue
+        data["models"][fam] = {"input": b["input_cost_per_token"] * 1e6,
+                               "output": b["output_cost_per_token"] * 1e6}
+        if fam == "sonnet":
+            ic = b["input_cost_per_token"]
+            cw, cr = b.get("cache_creation_input_token_cost"), b.get("cache_read_input_token_cost")
+            if isinstance(cw, (int, float)) and ic:
+                data["cw"] = cw / ic
+            if isinstance(cr, (int, float)) and ic:
+                data["cr"] = cr / ic
+    _apply_price_data(data)
+    try:
+        json.dump(data, open(PRICE_CACHE, "w"))
+    except Exception:
+        pass
+    if verbose:
+        print(f"(prices: live from LiteLLM cost map, {data['_fetched']})", file=sys.stderr)
+
+
+def price_for(model):
+    m = (model or "").lower()
+    for key in PRICING:
+        if key in m:
+            return PRICING[key], key
+    return PRICING["sonnet"], "sonnet?"  # fallback; flagged in output
+
+
+def entry_cost(usage, model):
+    p, _ = price_for(model)
+    inp  = usage.get("input_tokens", 0) or 0
+    out  = usage.get("output_tokens", 0) or 0
+    cw   = usage.get("cache_creation_input_tokens", 0) or 0
+    cr   = usage.get("cache_read_input_tokens", 0) or 0
+    return (inp * p["input"]
+            + cw * p["input"] * CACHE_WRITE_MULT
+            + cr * p["input"] * CACHE_READ_MULT
+            + out * p["output"]) / 1_000_000.0
+
+
+# --------------------------------------------------------------------------------------
+# Parsing
+# --------------------------------------------------------------------------------------
+def parse_session(path):
+    """Reduce one JSONL transcript to a session summary with cost + features."""
+    s = {
+        "session": os.path.splitext(os.path.basename(path))[0],
+        "project": os.path.basename(os.path.dirname(path)),
+        "cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
+        "assistant_turns": 0, "tool_calls": 0, "files": set(),
+        "models": set(), "undercount_hits": 0, "ts_first": None, "ts_last": None,
+    }
+    with open(path, "r", errors="ignore") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = e.get("timestamp")
+            if ts:
+                s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
+                s["ts_last"]  = max(s["ts_last"], ts) if s["ts_last"] else ts
+            msg = e.get("message") or {}
+            if e.get("type") == "assistant" or msg.get("role") == "assistant":
+                usage = msg.get("usage") or {}
+                model = msg.get("model") or e.get("model")
+                if usage:
+                    s["assistant_turns"] += 1
+                    s["input"]       += usage.get("input_tokens", 0) or 0
+                    s["output"]      += usage.get("output_tokens", 0) or 0
+                    s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
+                    s["cache_read"]  += usage.get("cache_read_input_tokens", 0) or 0
+                    if model:
+                        s["models"].add(model)
+                    # Prefer an explicit cost field if the tool wrote one; else compute.
+                    s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+                        else entry_cost(usage, model)
+                    # Known Claude Code bug: input_tokens is a streaming placeholder,
+                    # often 0/1 while real input lives in the cache fields.
+                    if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+                        s["undercount_hits"] += 1
+                # tool calls + files touched, from content blocks
+                content = msg.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            s["tool_calls"] += 1
+                            if block.get("name") in FILE_TOOLS:
+                                fp = (block.get("input") or {}).get("file_path") \
+                                    or (block.get("input") or {}).get("notebook_path")
+                                if fp:
+                                    s["files"].add(fp)
+    s["files_touched"] = len(s["files"])
+    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    return s
+
+
+def _duration_min(t0, t1):
+    """Wall-clock minutes between first and last event (rough: includes idle/think time)."""
+    import datetime
+    def ep(t):
+        try:
+            return datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    a, b = (ep(t0) if t0 else None), (ep(t1) if t1 else None)
+    return round((b - a) / 60.0, 1) if (a is not None and b is not None and b >= a) else None
+
+
+def load(root):
+    if os.path.isfile(root) and root.endswith(".jsonl"):
+        paths = [root]
+    else:
+        paths = glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)
+    sessions = []
+    for p in paths:
+        try:
+            sess = parse_session(p)
+            if sess["assistant_turns"] > 0:
+                sessions.append(sess)
+        except Exception as ex:
+            print(f"  ! skipped {p}: {ex}", file=sys.stderr)
+    return sessions
+
+
+# --------------------------------------------------------------------------------------
+# Stats helpers
+# --------------------------------------------------------------------------------------
+def pct(values, q):
+    if not values:
+        return 0.0
+    xs = sorted(values)
+    k = (len(xs) - 1) * q
+    lo = math.floor(k); hi = math.ceil(k)
+    if lo == hi:
+        return xs[int(k)]
+    return xs[lo] * (hi - k) + xs[hi] * (k - lo)
+
+
+def money(x):
+    return f"${x:,.2f}"
+
+
+# --------------------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------------------
+def cmd_report(args):
+    sessions = load(args.path)
+    if not sessions:
+        print(f"No usable sessions found under {args.path}. Try `demo` first.")
+        return
+    total = sum(s["cost"] for s in sessions)
+    costs = [s["cost"] for s in sessions]
+    by_proj, by_model, by_day = defaultdict(float), defaultdict(float), defaultdict(float)
+    fallback = 0
+    for s in sessions:
+        by_proj[s["project"]] += s["cost"]
+        for m in (s["models"] or {"unknown"}):
+            by_model[m] += s["cost"] / max(1, len(s["models"]))
+        if s["ts_first"]:
+            by_day[s["ts_first"][:10]] += s["cost"]
+        if not s["models"]:
+            fallback += 1
+
+    print("=" * 68)
+    print("TokenCast - spend attribution")
+    print("=" * 68)
+    print(f"Sessions analyzed : {len(sessions)}")
+    print(f"Total spend       : {money(total)}")
+    print(f"Mean / session    : {money(total/len(sessions))}")
+    print(f"Per-task spread   : p50 {money(pct(costs,.5))}   "
+          f"p90 {money(pct(costs,.9))}   p95 {money(pct(costs,.95))}   max {money(max(costs))}")
+    print()
+    print("By project:")
+    for k, v in sorted(by_proj.items(), key=lambda x: -x[1])[:8]:
+        print(f"  {v/total*100:5.1f}%  {money(v):>12}  {k}")
+    print("By model:")
+    for k, v in sorted(by_model.items(), key=lambda x: -x[1])[:8]:
+        print(f"  {v/total*100:5.1f}%  {money(v):>12}  {k}")
+
+    # The honest part: data quality.
+    total_turns = sum(s["assistant_turns"] for s in sessions)
+    undercount  = sum(s["undercount_hits"] for s in sessions)
+    print()
+    print("Data-quality check:")
+    if total_turns:
+        frac = undercount / total_turns
+        flag = "  <-- input_tokens look like streaming placeholders" if frac > 0.2 else ""
+        print(f"  {frac*100:.0f}% of assistant turns have input_tokens<=1 with output>0{flag}")
+    if fallback:
+        print(f"  {fallback} session(s) had no model id; priced at Sonnet fallback")
+    print("  Note: Claude Code's JSONL undercounts raw input tokens (cache fields are")
+    print("  reliable). Absolute costs here are a floor. The accurate number lives with")
+    print("  the provider. That gap is the whole argument -- see the essay.")
+
+    if args.cap is not None:
+        clipped = [s for s in sessions if s["cost"] > args.cap]
+        spill = sum(s["cost"] - args.cap for s in clipped)
+        print()
+        print(f"If a hard cap of {money(args.cap)}/session had been enforced:")
+        print(f"  {len(clipped)} of {len(sessions)} tasks ({len(clipped)/len(sessions)*100:.0f}%) "
+              f"would have been cut off mid-work.")
+        print(f"  {money(spill)} of real work sat above the line.")
+
+    print()
+    print("Most expensive tasks:")
+    for s in sorted(sessions, key=lambda x: -x["cost"])[:5]:
+        print(f"  {money(s['cost']):>10}  turns={s['assistant_turns']:>3} "
+              f"tools={s['tool_calls']:>3} files={s['files_touched']:>2}  {s['session'][:28]}")
+
+
+def _mins(x):
+    if x is None:
+        return "  n/a"
+    if x >= 60:
+        return f"{x/60:.1f} h"
+    return f"{x:.0f} min"
+
+
+def cmd_forecast(args):
+    sessions = load(args.path)
+    if len(sessions) < 5:
+        print("Need at least ~5 historical sessions to calibrate a forecast.")
+        return
+    # Feature vector: [files_touched, tool_calls, output_tokens, assistant_turns]
+    feats = ["files_touched", "tool_calls", "output", "assistant_turns"]
+    means = {f: statistics.mean(s[f] for s in sessions) for f in feats}
+    stds  = {f: (statistics.pstdev(s[f] for s in sessions) or 1.0) for f in feats}
+
+    target = {
+        "files_touched": args.files if args.files is not None else means["files_touched"],
+        "tool_calls":    args.tools if args.tools is not None else means["tool_calls"],
+        "output":        args.output if args.output is not None else means["output"],
+        "assistant_turns": means["assistant_turns"],
+    }
+
+    def dist(s):
+        return math.sqrt(sum(((s[f] - target[f]) / stds[f]) ** 2 for f in feats))
+
+    k = max(5, len(sessions) // 4)
+    neighbors = sorted(sessions, key=dist)[:k]
+    ncosts = [s["cost"] for s in neighbors]
+    ndurs  = [s["duration_min"] for s in neighbors if s["duration_min"] is not None]
+
+    print("=" * 68)
+    print("TokenCast - task estimate (calibrated on YOUR history, not a guess)")
+    print("=" * 68)
+    print(f"Task profile: ~{target['files_touched']:.0f} files, "
+          f"~{target['tool_calls']:.0f} tool calls")
+    print(f"Matched against {k} most similar past tasks (of {len(sessions)}).")
+    print()
+    print("Per task:")
+    print(f"  Cost   p50 {money(pct(ncosts,.5)):>9}   p90 {money(pct(ncosts,.9)):>9}   p95 {money(pct(ncosts,.95)):>9}")
+    if ndurs:
+        print(f"  Time   p50 {_mins(pct(ndurs,.5)):>9}   p90 {_mins(pct(ndurs,.9)):>9}   p95 {_mins(pct(ndurs,.95)):>9}")
+        print("         (wall-clock incl. think/idle time -- a rough timeline proxy)")
+    print()
+    print("  -> Put the p90 in the estimate, not the p50. The same task does not cost")
+    print("     the same twice, and the next model release moves this whole curve.")
+
+    # Sprint / project aggregate via Monte Carlo over the matched distribution.
+    if args.count and args.count > 1:
+        import random
+        random.seed(0)
+        TRIALS = 5000
+        totals_c, totals_t = [], []
+        for _ in range(TRIALS):
+            c = sum(random.choice(ncosts) for _ in range(args.count))
+            totals_c.append(c)
+            if ndurs:
+                totals_t.append(sum(random.choice(ndurs) for _ in range(args.count)))
+        print()
+        print(f"Sprint / project of {args.count} similar tasks (Monte Carlo, {TRIALS} trials):")
+        print(f"  Budget  p50 {money(pct(totals_c,.5)):>10}   p90 {money(pct(totals_c,.9)):>10}")
+        if totals_t:
+            print(f"  Effort  p50 {_mins(pct(totals_t,.5)):>10}   p90 {_mins(pct(totals_t,.9)):>10}"
+                  "   (sequential; parallelize across engineers to compress)")
+        print("  Plan the budget and the deadline to the p90 column.")
+
+    print()
+    print("Comparable past tasks:")
+    for s in sorted(neighbors, key=lambda x: -x["cost"])[:6]:
+        print(f"  {money(s['cost']):>10}  {_mins(s['duration_min']):>7}  "
+              f"files={s['files_touched']:>2} tools={s['tool_calls']:>3} turns={s['assistant_turns']:>3}")
+
+
+def cmd_demo(args):
+    """Generate synthetic JSONL that mimics Claude Code's schema (incl. the input-token bug)."""
+    random.seed(args.seed)
+    out = args.out
+    models = ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
+    os.makedirs(os.path.join(out, "demo-project"), exist_ok=True)
+    for i in range(args.sessions):
+        size = random.choice(["s", "s", "m", "m", "m", "l", "xl"])
+        turns = {"s": (2, 6), "m": (8, 20), "l": (25, 50), "xl": (60, 120)}[size]
+        n = random.randint(*turns)
+        model = random.choices(models, weights=[0.25, 0.65, 0.10])[0]
+        path = os.path.join(out, "demo-project", f"sess-{size}-{i:03d}.jsonl")
+        with open(path, "w") as fh:
+            t0 = 1748000000 + i * 3600
+            fh.write(json.dumps({"type": "user", "timestamp": _iso(t0),
+                                 "message": {"role": "user", "content": "..."}}) + "\n")
+            for j in range(n):
+                out_tok = random.randint(300, 2500)
+                cache_read = random.randint(20_000, 220_000)  # the real cost driver
+                cache_write = random.randint(0, 30_000)
+                # Mimic the documented bug: input_tokens is usually a placeholder.
+                inp = 1 if random.random() < 0.75 else random.randint(50, 1200)
+                content = [{"type": "text", "text": "..."}]
+                if random.random() < 0.6:
+                    tool = random.choice(list(FILE_TOOLS))
+                    content.append({"type": "tool_use", "name": tool,
+                                    "input": {"file_path": f"src/mod_{random.randint(1, 12)}.py"}})
+                rec = {"type": "assistant", "timestamp": _iso(t0 + j * 30),
+                       "message": {"role": "assistant", "model": model, "content": content,
+                                   "usage": {"input_tokens": inp, "output_tokens": out_tok,
+                                             "cache_creation_input_tokens": cache_write,
+                                             "cache_read_input_tokens": cache_read}}}
+                fh.write(json.dumps(rec) + "\n")
+    print(f"Wrote {args.sessions} synthetic sessions to {out}/demo-project/")
+    print(f"Now run:  python {os.path.basename(__file__)} report {out}")
+
+
+def _iso(epoch):
+    import datetime
+    return datetime.datetime.utcfromtimestamp(epoch).isoformat() + "Z"
+
+
+def main():
+    ap = argparse.ArgumentParser(description="TokenCast - log-based cost estimator for agentic coding")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("report", help="attribute past spend from logs")
+    r.add_argument("path", nargs="?", default=os.path.expanduser("~/.claude/projects"))
+    r.add_argument("--cap", type=float, default=None, help="show what a per-session hard cap would clip")
+    r.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
+    r.set_defaults(func=cmd_report)
+
+    f = sub.add_parser("forecast", help="estimate a new task's cost from your history")
+    f.add_argument("path", nargs="?", default=os.path.expanduser("~/.claude/projects"))
+    f.add_argument("--files", type=int, default=None, help="expected # files the task will touch")
+    f.add_argument("--tools", type=int, default=None, help="expected # tool calls")
+    f.add_argument("--output", type=int, default=None, help="expected output tokens (optional)")
+    f.add_argument("--count", type=int, default=None, help="# of similar tasks to roll up into a sprint/project estimate")
+    f.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
+    f.set_defaults(func=cmd_forecast)
+
+    d = sub.add_parser("demo", help="generate synthetic logs to try the tool")
+    d.add_argument("--out", default="./sample_logs")
+    d.add_argument("--sessions", type=int, default=40)
+    d.add_argument("--seed", type=int, default=7)
+    d.set_defaults(func=cmd_demo)
+
+    args = ap.parse_args()
+    if getattr(args, "refresh_prices", False):
+        refresh_prices()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

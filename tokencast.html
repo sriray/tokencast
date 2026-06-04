@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TokenCast — a cost forecast for agentic coding</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --gray:#6b7280; --light:#9ca3af; --line:#e6e6e6;
+    --accent:#c2410c; --blue:#1d4ed8; --bg:#ffffff; --panel:#fafaf9;
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       color:var(--ink); background:var(--bg); margin:0; line-height:1.5;}
+  .wrap{max-width:920px; margin:0 auto; padding:32px 20px 80px;}
+  h1{font-size:30px; margin:0 0 4px;}
+  .sub{color:var(--gray); font-size:15px; margin:0 0 24px; max-width:680px;}
+  .pill{display:inline-block; font-size:12px; color:var(--accent); border:1px solid var(--accent);
+        border-radius:999px; padding:2px 10px; margin-bottom:14px;}
+  .controls{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:18px 0;}
+  button,.filebtn{font-size:14px; font-weight:600; border-radius:8px; padding:10px 16px; cursor:pointer;
+    border:1px solid var(--ink); background:var(--ink); color:#fff;}
+  button.secondary,.filebtn{background:#fff; color:var(--ink);}
+  button:hover{opacity:.9}
+  .filebtn{display:inline-block}
+  .filebtn input{display:none}
+  .note{font-size:12.5px; color:var(--light); margin-top:8px;}
+  .privacy{font-size:12.5px; color:var(--gray); background:var(--panel); border:1px solid var(--line);
+    border-radius:8px; padding:10px 12px; margin:10px 0 0;}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:22px 0;}
+  .card{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:var(--panel);}
+  .card .k{font-size:12px; color:var(--gray); text-transform:uppercase; letter-spacing:.04em;}
+  .card .v{font-size:22px; font-weight:700; margin-top:4px;}
+  .card .v small{font-size:13px; font-weight:500; color:var(--gray);}
+  h2{font-size:18px; margin:30px 0 8px;}
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  th,td{text-align:left; padding:7px 8px; border-bottom:1px solid var(--line);}
+  th{color:var(--gray); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em;}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;}
+  .flag{background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:8px; padding:12px 14px;
+    font-size:13.5px; margin:14px 0;}
+  .hidden{display:none}
+  .row{display:flex; flex-wrap:wrap; gap:24px;}
+  .row > div{flex:1; min-width:260px;}
+  label{font-size:13px; color:var(--gray); display:block; margin-bottom:3px;}
+  input[type=number]{font-size:14px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; width:120px;}
+  .forecast-out{font-size:15px; margin-top:12px;}
+  .forecast-out b{font-size:20px;}
+  .axis{font-size:11px; fill:var(--light);}
+  .pricing{display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; font-size:13px;}
+  .pricing .grp{display:flex; flex-direction:column;}
+  details{margin:18px 0;}
+  summary{cursor:pointer; font-size:13px; color:var(--blue);}
+  a{color:var(--blue);}
+  .muted{color:var(--gray); font-size:13px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="pill">a provocation, not a product</div>
+  <h1>TokenCast</h1>
+  <p class="sub">Estimate what a coding task will <b>cost</b> and how <b>long</b> it takes — so you can
+    build software estimates and plan timelines in the metered era. It learns from the logs your
+    agent already writes to disk and returns a <b>range</b> (p50/p90/p95) for a single task or a whole
+    sprint, because the same task never costs the same twice. Companion to the essay
+    <i>“Software Just Went COGS.”</i></p>
+
+  <div class="controls">
+    <button id="demoBtn">▶ Load demo data</button>
+    <label class="filebtn">Choose your ~/.claude/projects folder
+      <input type="file" id="folder" webkitdirectory directory multiple>
+    </label>
+    <span class="muted" id="status">No data loaded yet.</span>
+  </div>
+  <div class="privacy">🔒 Everything runs in your browser. Your logs are parsed locally and
+    <b>never uploaded</b> anywhere. That’s the point: the only way to keep your spend data private
+    is to compute on it yourself — or have the provider, who already holds it, do it for you.</div>
+
+  <details>
+    <summary>Pricing (USD per 1M tokens) — edit if these have drifted</summary>
+    <div class="pricing" id="pricing" style="margin-top:12px;">
+      <div class="grp"><label>Opus in</label><input type="number" id="p_opus_in" value="5" step="0.5"></div>
+      <div class="grp"><label>Opus out</label><input type="number" id="p_opus_out" value="25" step="0.5"></div>
+      <div class="grp"><label>Sonnet in</label><input type="number" id="p_sonnet_in" value="3" step="0.5"></div>
+      <div class="grp"><label>Sonnet out</label><input type="number" id="p_sonnet_out" value="15" step="0.5"></div>
+      <div class="grp"><label>Haiku in</label><input type="number" id="p_haiku_in" value="1" step="0.25"></div>
+      <div class="grp"><label>Haiku out</label><input type="number" id="p_haiku_out" value="5" step="0.25"></div>
+      <div class="grp"><label>cache write ×</label><input type="number" id="p_cw" value="1.25" step="0.05"></div>
+      <div class="grp"><label>cache read ×</label><input type="number" id="p_cr" value="0.10" step="0.05"></div>
+    </div>
+    <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <button class="secondary" id="refreshPrices" type="button">↻ Refresh from live pricing</button>
+      <span class="muted" id="priceSrc">prices: built-in defaults</span>
+    </div>
+    <p class="note">There is no official machine-readable price feed from Anthropic, so “live” pulls the
+      community <a href="https://github.com/BerriAI/litellm" target="_blank">LiteLLM cost map</a> (day-0 updated).
+      Verify high-stakes numbers against <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank">Anthropic’s pricing page</a>.
+      Editing any value re-computes everything.</p>
+  </details>
+
+  <div id="results" class="hidden">
+    <div class="grid" id="cards"></div>
+
+    <h2>What your tasks cost</h2>
+    <p class="muted">Distribution of per-task spend. Drag the cap to see how many tasks a hard ceiling would cut off mid-work.</p>
+    <div style="display:flex; align-items:center; gap:14px; margin:8px 0;">
+      <label style="margin:0;">Per-task cap&nbsp;$</label>
+      <input type="number" id="cap" value="5" step="1" style="width:90px;">
+      <span class="muted" id="capOut"></span>
+    </div>
+    <svg id="hist" viewBox="0 0 880 240" style="width:100%; height:auto;"></svg>
+
+    <div class="row" style="margin-top:24px;">
+      <div>
+        <h2>Estimate a task (and a sprint)</h2>
+        <p class="muted">For your dev estimate and timeline — calibrated on your history, not a guess. (Research shows human-rated difficulty barely predicts token cost.)</p>
+        <label>Files it will likely touch</label>
+        <input type="number" id="f_files" value="8">
+        <label style="margin-top:10px;">Expected tool calls</label>
+        <input type="number" id="f_tools" value="30">
+        <label style="margin-top:10px;">Tasks like this in the sprint</label>
+        <input type="number" id="f_count" value="1" min="1">
+        <div class="forecast-out" id="forecastOut"></div>
+      </div>
+      <div>
+        <h2>Where the money goes</h2>
+        <table id="byModel"></table>
+        <table id="byProject" style="margin-top:14px;"></table>
+      </div>
+    </div>
+
+    <div class="flag" id="dq"></div>
+
+    <h2>Most expensive tasks</h2>
+    <table id="topTasks"></table>
+  </div>
+
+  <p class="note" style="margin-top:40px;">
+    TokenCast targets Claude Code logs (<code>~/.claude/projects</code>). The numbers are a
+    <b>floor</b>: Claude Code records input tokens as a streaming placeholder, so true cost is
+    higher. The accurate figure exists — only the provider has it. A lab could ship this as a
+    “cost preview” inside plan mode tomorrow. That’s the whole argument.
+  </p>
+</div>
+
+<script>
+// ---------- pricing ----------
+function pricing(){
+  const v = id => parseFloat(document.getElementById(id).value)||0;
+  return {
+    models:{
+      opus:{input:v('p_opus_in'),output:v('p_opus_out')},
+      sonnet:{input:v('p_sonnet_in'),output:v('p_sonnet_out')},
+      haiku:{input:v('p_haiku_in'),output:v('p_haiku_out')},
+    },
+    cw:v('p_cw'), cr:v('p_cr'),
+  };
+}
+const FILE_TOOLS = new Set(["Edit","Write","Read","MultiEdit","NotebookEdit"]);
+function priceFor(model,P){
+  const m=(model||"").toLowerCase();
+  for(const k of Object.keys(P.models)) if(m.includes(k)) return P.models[k];
+  return P.models.sonnet;
+}
+function entryCost(u,model,P){
+  const p=priceFor(model,P);
+  const inp=u.input_tokens||0, out=u.output_tokens||0,
+        cw=u.cache_creation_input_tokens||0, cr=u.cache_read_input_tokens||0;
+  return (inp*p.input + cw*p.input*P.cw + cr*p.input*P.cr + out*p.output)/1e6;
+}
+
+// ---------- parsing ----------
+function parseSession(name, text, project, P){
+  const s={session:name, project:project||"(root)", cost:0, output:0,
+           assistant_turns:0, tool_calls:0, files:new Set(), models:new Set(),
+           undercount:0, day:null, tsFirst:null, tsLast:null};
+  for(const line of text.split("\n")){
+    const t=line.trim(); if(!t) continue;
+    let e; try{ e=JSON.parse(t);}catch(_){ continue; }
+    if(e.timestamp){
+      const ms=Date.parse(e.timestamp);
+      if(!isNaN(ms)){ if(s.tsFirst===null||ms<s.tsFirst)s.tsFirst=ms; if(s.tsLast===null||ms>s.tsLast)s.tsLast=ms; }
+      if(!s.day) s.day=String(e.timestamp).slice(0,10);
+    }
+    const msg=e.message||{};
+    if(e.type==="assistant" || msg.role==="assistant"){
+      const u=msg.usage; const model=msg.model||e.model;
+      if(u){
+        s.assistant_turns++; s.output+=u.output_tokens||0;
+        if(model) s.models.add(model);
+        s.cost += (typeof e.costUSD==="number") ? e.costUSD : entryCost(u,model,P);
+        if((u.output_tokens||0)>0 && (u.input_tokens||0)<=1) s.undercount++;
+      }
+      if(Array.isArray(msg.content)) for(const b of msg.content){
+        if(b && b.type==="tool_use"){ s.tool_calls++;
+          if(FILE_TOOLS.has(b.name)){ const fp=(b.input||{}).file_path||(b.input||{}).notebook_path; if(fp) s.files.add(fp); }
+        }
+      }
+    }
+  }
+  s.files_touched=s.files.size;
+  s.duration_min=(s.tsFirst!==null && s.tsLast!==null && s.tsLast>=s.tsFirst)?(s.tsLast-s.tsFirst)/60000:null;
+  return s;
+}
+
+// ---------- stats ----------
+function pct(arr,q){ if(!arr.length) return 0; const x=[...arr].sort((a,b)=>a-b);
+  const k=(x.length-1)*q, lo=Math.floor(k), hi=Math.ceil(k);
+  return lo===hi ? x[k] : x[lo]*(hi-k)+x[hi]*(k-lo); }
+function money(x){ return "$"+x.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function mean(a){ return a.reduce((s,v)=>s+v,0)/(a.length||1); }
+function pstd(a){ const m=mean(a); return Math.sqrt(mean(a.map(v=>(v-m)**2)))||1; }
+function mins(x){ if(x==null) return "n/a"; return x>=60 ? (x/60).toFixed(1)+" h" : Math.round(x)+" min"; }
+function mc(arr,count,trials){ const out=[]; for(let t=0;t<trials;t++){ let s=0; for(let i=0;i<count;i++) s+=arr[Math.floor(Math.random()*arr.length)]; out.push(s);} return out; }
+
+// ---------- state ----------
+let SESSIONS=[];
+
+function recompute(){
+  const P=pricing();
+  // re-price from raw if we kept it; simplest: re-parse not stored, so we recompute cost lazily.
+  // We stored sessions already costed; for pricing edits we re-cost via stored token aggregates.
+  // To support live pricing edits we keep token aggregates per session:
+  for(const s of SESSIONS){
+    if(s._raw){ // recost from raw token sums
+      const p=priceFor([...s.models][0]||"sonnet",P);
+      s.cost=(s._raw.inp*p.input + s._raw.cw*p.input*P.cw + s._raw.cr*p.input*P.cr + s._raw.out*p.output)/1e6;
+    }
+  }
+  render();
+}
+
+function loadSessions(list){ SESSIONS=list; document.getElementById('results').classList.remove('hidden'); render(); }
+
+function render(){
+  if(!SESSIONS.length) return;
+  const costs=SESSIONS.map(s=>s.cost);
+  const total=costs.reduce((a,b)=>a+b,0);
+  // cards
+  document.getElementById('cards').innerHTML=[
+    ['Sessions', SESSIONS.length],
+    ['Total spend', money(total)],
+    ['Median / task', money(pct(costs,.5))],
+    ['p90 / task', money(pct(costs,.9))],
+    ['Worst task', money(Math.max(...costs))],
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+  // by model / project
+  const byModel={}, byProject={};
+  for(const s of SESSIONS){
+    const ms=[...s.models]; const share=s.cost/(ms.length||1);
+    (ms.length?ms:["(unknown)"]).forEach(m=>byModel[m]=(byModel[m]||0)+share);
+    byProject[s.project]=(byProject[s.project]||0)+s.cost;
+  }
+  document.getElementById('byModel').innerHTML=
+    `<tr><th>Model</th><th class="num">Spend</th><th class="num">%</th></tr>`+
+    Object.entries(byModel).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>
+      `<tr><td>${k}</td><td class="num">${money(v)}</td><td class="num">${(v/total*100).toFixed(1)}%</td></tr>`).join("");
+  document.getElementById('byProject').innerHTML=
+    `<tr><th>Project</th><th class="num">Spend</th><th class="num">%</th></tr>`+
+    Object.entries(byProject).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>
+      `<tr><td>${k}</td><td class="num">${money(v)}</td><td class="num">${(v/total*100).toFixed(1)}%</td></tr>`).join("");
+
+  // top tasks
+  document.getElementById('topTasks').innerHTML=
+    `<tr><th>Cost</th><th class="num">Turns</th><th class="num">Tools</th><th class="num">Files</th><th>Session</th></tr>`+
+    [...SESSIONS].sort((a,b)=>b.cost-a.cost).slice(0,6).map(s=>
+      `<tr><td class="num">${money(s.cost)}</td><td class="num">${s.assistant_turns}</td>
+       <td class="num">${s.tool_calls}</td><td class="num">${s.files_touched}</td>
+       <td class="muted">${s.session.slice(0,32)}</td></tr>`).join("");
+
+  // data quality
+  const turns=SESSIONS.reduce((a,s)=>a+s.assistant_turns,0);
+  const uc=SESSIONS.reduce((a,s)=>a+s.undercount,0);
+  const frac= turns? uc/turns : 0;
+  document.getElementById('dq').innerHTML =
+    `<b>Data-quality check:</b> ${(frac*100).toFixed(0)}% of assistant turns log input_tokens ≤ 1 with output &gt; 0`+
+    (frac>0.2? ` — these are streaming placeholders, so the totals above are a <b>floor</b>, not the true bill.`:`.`)+
+    ` Cache fields are reliable; raw input is not. The accurate number lives with the provider.`;
+
+  drawHist(costs); updateCap(); forecast();
+}
+
+function drawHist(costs){
+  const W=880,H=240,pad=34, n=14;
+  const max=Math.max(...costs, 0.0001);
+  const bins=new Array(n).fill(0);
+  costs.forEach(c=>{ let i=Math.min(n-1,Math.floor(c/max*n)); bins[i]++; });
+  const bmax=Math.max(...bins,1);
+  const bw=(W-pad*2)/n;
+  let svg=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#ccc"/>`;
+  for(let i=0;i<n;i++){
+    const h=(bins[i]/bmax)*(H-pad*2);
+    const x=pad+i*bw+2, y=H-pad-h;
+    svg+=`<rect x="${x}" y="${y}" width="${bw-4}" height="${h}" fill="#1d4ed8" opacity="0.85"/>`;
+  }
+  // labels
+  svg+=`<text class="axis" x="${pad}" y="${H-pad+16}">$0</text>`;
+  svg+=`<text class="axis" x="${W-pad}" y="${H-pad+16}" text-anchor="end">${money(max)}</text>`;
+  svg+=`<text class="axis" x="${pad}" y="18">tasks per cost bin</text>`;
+  document.getElementById('hist').innerHTML=svg;
+  document.getElementById('hist').dataset.max=max;
+}
+
+function updateCap(){
+  const cap=parseFloat(document.getElementById('cap').value)||0;
+  const clipped=SESSIONS.filter(s=>s.cost>cap);
+  const spill=clipped.reduce((a,s)=>a+(s.cost-cap),0);
+  document.getElementById('capOut').innerHTML = SESSIONS.length?
+    `${clipped.length} of ${SESSIONS.length} tasks (${(clipped.length/SESSIONS.length*100).toFixed(0)}%) would be cut off mid-work · ${money(spill)} of real work above the line`:"";
+  // draw cap line on hist
+  const svg=document.getElementById('hist'); const max=parseFloat(svg.dataset.max||1);
+  const W=880,pad=34; const x=pad+Math.min(1,cap/max)*(W-pad*2);
+  const base=svg.innerHTML.split('<line class="capline"')[0];
+  svg.innerHTML = base + `<line class="capline" x1="${x}" y1="6" x2="${x}" y2="206" stroke="#c2410c" stroke-width="2" stroke-dasharray="5 4"/>`+
+    `<text class="axis" x="${x+4}" y="16" fill="#c2410c">cap ${money(cap)}</text>`;
+}
+
+function forecast(){
+  if(SESSIONS.length<5){ document.getElementById('forecastOut').innerHTML=
+    `<span class="muted">Need ~5+ tasks to calibrate.</span>`; return; }
+  const feats=["files_touched","tool_calls","output","assistant_turns"];
+  const stds={}, means={};
+  feats.forEach(f=>{ const a=SESSIONS.map(s=>s[f]); means[f]=mean(a); stds[f]=pstd(a); });
+  const target={
+    files_touched:parseFloat(document.getElementById('f_files').value)||means.files_touched,
+    tool_calls:parseFloat(document.getElementById('f_tools').value)||means.tool_calls,
+    output:means.output, assistant_turns:means.assistant_turns,
+  };
+  const dist=s=>Math.sqrt(feats.reduce((a,f)=>a+((s[f]-target[f])/stds[f])**2,0));
+  const k=Math.max(5,Math.floor(SESSIONS.length/4));
+  const nearObj=[...SESSIONS].sort((a,b)=>dist(a)-dist(b)).slice(0,k);
+  const near=nearObj.map(s=>s.cost);
+  const durs=nearObj.map(s=>s.duration_min).filter(x=>x!=null);
+  const count=Math.max(1,parseInt(document.getElementById('f_count').value)||1);
+
+  let html =
+    `<div style="margin-bottom:6px;"><b>Per task</b></div>`+
+    `Cost — p50 <b>${money(pct(near,.5))}</b> · p90 <b>${money(pct(near,.9))}</b> · p95 ${money(pct(near,.95))}<br>`+
+    (durs.length? `Time — p50 <b>${mins(pct(durs,.5))}</b> · p90 <b>${mins(pct(durs,.9))}</b> · p95 ${mins(pct(durs,.95))}<br>
+      <span class="muted" style="font-size:12px;">wall-clock incl. think/idle — a rough timeline proxy</span><br>`:"");
+
+  if(count>1){
+    const tc=mc(near,count,4000);
+    const td=durs.length? mc(durs,count,4000):null;
+    html += `<div style="margin:12px 0 6px;"><b>Sprint of ${count} similar tasks</b></div>`+
+      `Budget — p50 <b>${money(pct(tc,.5))}</b> · p90 <b>${money(pct(tc,.9))}</b><br>`+
+      (td? `Effort — p50 <b>${mins(pct(td,.5))}</b> · p90 <b>${mins(pct(td,.9))}</b>
+        <span class="muted" style="font-size:12px;">(sequential; parallelize to compress)</span><br>`:"");
+  }
+  html += `<span class="muted">Put the p90 in your estimate. Matched on your ${k} most similar past tasks.</span>`;
+  document.getElementById('forecastOut').innerHTML=html;
+}
+
+// ---------- demo ----------
+function rint(a,b){ return Math.floor(a+Math.random()*(b-a+1)); }
+function demoData(){
+  const P=pricing();
+  const models=["claude-opus-4-8","claude-sonnet-4-6","claude-haiku-4-5"];
+  const sizes=["s","s","m","m","m","l","xl"];
+  const turnsBy={s:[2,6],m:[8,20],l:[25,50],xl:[60,120]};
+  const out=[];
+  for(let i=0;i<40;i++){
+    const size=sizes[rint(0,sizes.length-1)];
+    const n=rint(turnsBy[size][0],turnsBy[size][1]);
+    const r=Math.random(); const model= r<0.25?models[0] : r<0.90?models[1] : models[2];
+    let outTok=0,cw=0,cr=0,inp=0,tools=0; const files=new Set();
+    for(let j=0;j<n;j++){
+      outTok+=rint(300,2500); cr+=rint(20000,220000); cw+=rint(0,30000);
+      inp+=Math.random()<0.75?1:rint(50,1200);
+      if(Math.random()<0.6){ tools++; files.add("src/mod_"+rint(1,12)+".py"); }
+    }
+    const p=priceFor(model,P);
+    const cost=(inp*p.input + cw*p.input*P.cw + cr*p.input*P.cr + outTok*p.output)/1e6;
+    const undercount=Math.round(n*0.75);
+    out.push({session:`sess-${size}-${String(i).padStart(3,"0")}`, project:"demo-project",
+      cost, output:outTok, assistant_turns:n, tool_calls:tools, files,
+      files_touched:files.size, models:new Set([model]), undercount, day:"2026-05-01",
+      duration_min:+(n*0.5+rint(0,6)).toFixed(1), _raw:{inp,out:outTok,cw,cr}});
+  }
+  return out;
+}
+
+// ---------- live pricing ----------
+const LITELLM_URL="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+function familyBest(json, fam){
+  let best=null;
+  for(const [k,v] of Object.entries(json)){
+    if(!v || typeof v!=="object") continue;
+    const prov=(v.litellm_provider||"");
+    if(prov && prov!=="anthropic") continue;
+    if(!k.toLowerCase().includes(fam)) continue;
+    if(typeof v.input_cost_per_token!=="number"||typeof v.output_cost_per_token!=="number") continue;
+    if(!best || v.input_cost_per_token>best.input_cost_per_token) best=v;
+  }
+  return best;
+}
+async function fetchLivePrices(manual){
+  const src=document.getElementById('priceSrc');
+  src.textContent="prices: fetching…";
+  try{
+    const r=await fetch(LITELLM_URL,{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    const set=(id,val)=>{ const el=document.getElementById(id); if(typeof val==="number") el.value=+(val).toFixed(4); };
+    let any=false;
+    for(const fam of ["opus","sonnet","haiku"]){
+      const b=familyBest(j,fam);
+      if(!b) continue; any=true;
+      set('p_'+fam+'_in',  b.input_cost_per_token*1e6);
+      set('p_'+fam+'_out', b.output_cost_per_token*1e6);
+      // derive cache multipliers from the sonnet entry (representative)
+      if(fam==="sonnet"){
+        if(typeof b.cache_creation_input_token_cost==="number")
+          set('p_cw', b.cache_creation_input_token_cost/b.input_cost_per_token);
+        if(typeof b.cache_read_input_token_cost==="number")
+          set('p_cr', b.cache_read_input_token_cost/b.input_cost_per_token);
+      }
+    }
+    if(!any) throw new Error("no anthropic entries");
+    src.textContent="prices: live · LiteLLM cost map · "+new Date().toISOString().slice(0,10);
+    if(SESSIONS.length) recompute();
+  }catch(e){
+    src.textContent="prices: built-in defaults (live fetch blocked: "+e.message+")";
+    if(manual) alert("Couldn't fetch live prices ("+e.message+").\nUsing built-in defaults — you can edit them by hand.");
+  }
+}
+document.getElementById('refreshPrices').onclick=()=>fetchLivePrices(true);
+
+// ---------- wire up ----------
+document.getElementById('demoBtn').onclick=()=>{
+  loadSessions(demoData());
+  document.getElementById('status').textContent="Showing synthetic demo data (40 sessions).";
+};
+document.getElementById('folder').onchange=async (ev)=>{
+  const P=pricing();
+  const files=[...ev.target.files].filter(f=>f.name.endsWith(".jsonl"));
+  if(!files.length){ document.getElementById('status').textContent="No .jsonl files found in that folder."; return; }
+  document.getElementById('status').textContent=`Parsing ${files.length} log file(s)…`;
+  const sessions=[];
+  for(const f of files){
+    const rel=f.webkitRelativePath||f.name; const parts=rel.split("/");
+    const project=parts.length>1?parts[parts.length-2]:"(root)";
+    const text=await f.text();
+    const s=parseSession(f.name.replace(/\.jsonl$/,""), text, project, P);
+    if(s.assistant_turns>0) sessions.push(s);
+  }
+  if(!sessions.length){ document.getElementById('status').textContent="No usable sessions (no token usage found)."; return; }
+  loadSessions(sessions);
+  document.getElementById('status').textContent=`Loaded ${sessions.length} of your sessions — nothing left your browser.`;
+};
+['cap'].forEach(id=>document.getElementById(id).addEventListener('input',updateCap));
+['f_files','f_tools','f_count'].forEach(id=>document.getElementById(id).addEventListener('input',forecast));
+['p_opus_in','p_opus_out','p_sonnet_in','p_sonnet_out','p_haiku_in','p_haiku_out','p_cw','p_cr']
+  .forEach(id=>document.getElementById(id).addEventListener('input',recompute));
+
+// stay current: try a live refresh on load, silently fall back to built-in defaults
+fetchLivePrices(false);
+</script>
+</body>
+</html>
