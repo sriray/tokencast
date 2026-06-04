@@ -3,10 +3,9 @@
 A unified dimension model: each Dimension has a weight and is scored EITHER by rule checks
 OR by an LLM judge rubric (exactly one).
 """
-import os
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 try:
     import yaml
@@ -124,10 +123,16 @@ class EvalTask:
         if d.get("seed_dir") and d.get("seed_repo"):
             raise ValueError(
                 f"task {d['id']!r}: seed_dir and seed_repo are mutually exclusive")
+        seed_repo = d.get("seed_repo")
+        if seed_repo is not None and not seed_repo.get("path"):
+            raise ValueError(f"task {d['id']!r}: seed_repo requires 'path'")
+        threshold = float(d.get("pass_threshold", 0.6))
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError(
+                f"task {d['id']!r}: pass_threshold must be between 0 and 1, got {threshold}")
         dims = [Dimension.from_dict(x) for x in (d.get("dimensions") or [])]
-        return cls(id=d["id"], prompt=d["prompt"],
-                   pass_threshold=float(d.get("pass_threshold", 0.6)), dimensions=dims,
-                   seed_dir=d.get("seed_dir"), seed_repo=d.get("seed_repo"))
+        return cls(id=d["id"], prompt=d["prompt"], pass_threshold=threshold,
+                   dimensions=dims, seed_dir=d.get("seed_dir"), seed_repo=seed_repo)
 
     def to_dict(self):
         out = {"id": self.id, "prompt": self.prompt, "pass_threshold": self.pass_threshold,
@@ -150,6 +155,11 @@ class EvalSet:
         tasks = [EvalTask.from_dict(t) for t in (data.get("tasks") or [])]
         if not tasks:
             raise ValueError("eval set has no tasks")
+        seen = set()
+        for t in tasks:
+            if t.id in seen:
+                raise ValueError(f"duplicate task id: {t.id!r}")
+            seen.add(t.id)
         return cls(tasks=tasks)
 
     @classmethod

@@ -160,3 +160,22 @@ def test_evalset_single_task_is_fine(tmp_path):
         {"id": "solo", "prompt": "p", "dimensions": [{"name": "d", "judge": "ok? 0-1"}]}]}))
     es = EvalSet.load(str(p))
     assert len(es.tasks) == 1
+
+
+def test_evaltask_rejects_seed_repo_without_path():
+    with pytest.raises(ValueError, match="seed_repo requires 'path'"):
+        EvalTask.from_dict({"id": "t", "prompt": "p", "seed_repo": {"ref": "HEAD"},
+                            "dimensions": [{"name": "d", "judge": "ok? 0-1"}]})
+
+
+def test_evaltask_rejects_out_of_range_threshold():
+    with pytest.raises(ValueError, match="pass_threshold"):
+        EvalTask.from_dict({"id": "t", "prompt": "p", "pass_threshold": 5,
+                            "dimensions": [{"name": "d", "judge": "ok? 0-1"}]})
+
+
+def test_evalset_rejects_duplicate_task_ids():
+    with pytest.raises(ValueError, match="duplicate task id"):
+        EvalSet.from_dict({"tasks": [
+            {"id": "dup", "prompt": "a", "dimensions": [{"name": "d", "judge": "ok? 0-1"}]},
+            {"id": "dup", "prompt": "b", "dimensions": [{"name": "d", "judge": "ok? 0-1"}]}]})
