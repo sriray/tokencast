@@ -200,8 +200,9 @@ def status(config, scope, records, today):
         projected = None
     else:
         runway_days = remaining / burn
-        proj = today + datetime.timedelta(days=runway_days)
-        projected = proj if proj < end else None           # None => survives the period
+        remaining_in_period = (end - today).days
+        projected = (today + datetime.timedelta(days=runway_days)
+                     if runway_days < remaining_in_period else None)  # None => survives period
 
     return BudgetStatus(
         scope=scope, amount=amount, consumed_real=consumed_real,

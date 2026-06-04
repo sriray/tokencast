@@ -245,6 +245,25 @@ def test_status_over_budget_exhausted_now():
     assert st.projected_exhaustion == datetime.date(2026, 4, 20)
 
 
+def test_status_tiny_burn_does_not_overflow():
+    # one cheap session early in the period -> runway astronomically large; must NOT crash
+    records = [SpendRecord(cost=0.0001, project="projA",
+                           date=datetime.date(2026, 4, 1), source="real")]
+    st = status(_Cfg(), "global", records, datetime.date(2026, 4, 1))
+    assert st.projected_exhaustion is None        # survives the period (no overflow)
+    assert st.runway_days is not None and st.runway_days > 0
+
+
+def test_status_in_period_exhaustion_returns_date():
+    # high burn -> exhaustion lands within the period -> a real date in [today, period_end)
+    records = [SpendRecord(cost=900.0, project="projA",
+                           date=datetime.date(2026, 4, 1), source="real")]
+    today = datetime.date(2026, 4, 10)            # elapsed 10 days, burn 90/day, remaining 100
+    st = status(_Cfg(), "global", records, today)
+    assert st.projected_exhaustion is not None
+    assert today <= st.projected_exhaustion < st.period_end
+
+
 def test_runway_tasks_and_fits():
     assert runway_tasks(1000.0, 12.5) == 80
     assert runway_tasks(1000.0, 0) == 0
