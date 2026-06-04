@@ -104,3 +104,74 @@ class Dimension:
         else:
             out["judge"] = self.judge
         return out
+
+
+@dataclass
+class EvalTask:
+    id: str
+    prompt: str
+    pass_threshold: float = 0.6
+    dimensions: List[Dimension] = field(default_factory=list)
+    seed_dir: Optional[str] = None
+    seed_repo: Optional[Dict[str, str]] = None
+
+    @classmethod
+    def from_dict(cls, d):
+        if not d.get("id"):
+            raise ValueError("task requires 'id'")
+        if not d.get("prompt"):
+            raise ValueError(f"task {d.get('id')!r} requires 'prompt'")
+        if d.get("seed_dir") and d.get("seed_repo"):
+            raise ValueError(
+                f"task {d['id']!r}: seed_dir and seed_repo are mutually exclusive")
+        dims = [Dimension.from_dict(x) for x in (d.get("dimensions") or [])]
+        return cls(id=d["id"], prompt=d["prompt"],
+                   pass_threshold=float(d.get("pass_threshold", 0.6)), dimensions=dims,
+                   seed_dir=d.get("seed_dir"), seed_repo=d.get("seed_repo"))
+
+    def to_dict(self):
+        out = {"id": self.id, "prompt": self.prompt, "pass_threshold": self.pass_threshold,
+               "dimensions": [dim.to_dict() for dim in self.dimensions]}
+        if self.seed_dir:
+            out["seed_dir"] = self.seed_dir
+        if self.seed_repo:
+            out["seed_repo"] = self.seed_repo
+        return out
+
+
+@dataclass
+class EvalSet:
+    tasks: List[EvalTask] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("eval set must be a mapping with a 'tasks' list")
+        tasks = [EvalTask.from_dict(t) for t in (data.get("tasks") or [])]
+        if not tasks:
+            raise ValueError("eval set has no tasks")
+        return cls(tasks=tasks)
+
+    @classmethod
+    def load(cls, path):
+        if yaml is None:
+            raise RuntimeError("pyyaml is required; install tokencast[optimize]")
+        with open(path, encoding="utf-8") as fh:
+            try:
+                data = yaml.safe_load(fh) or {}
+            except yaml.YAMLError as e:
+                raise ValueError(f"failed to parse {path}: {e}")
+        try:
+            return cls.from_dict(data)
+        except ValueError as e:
+            raise ValueError(f"{path}: {e}")
+
+    def to_dict(self):
+        return {"tasks": [t.to_dict() for t in self.tasks]}
+
+    def save(self, path):
+        if yaml is None:
+            raise RuntimeError("pyyaml is required; install tokencast[optimize]")
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(self.to_dict(), fh, sort_keys=False)
+        return path

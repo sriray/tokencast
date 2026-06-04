@@ -84,3 +84,79 @@ def test_dimension_rejects_empty_rule():
 def test_dimension_rejects_negative_weight():
     with pytest.raises(ValueError, match="weight"):
         Dimension.from_dict({"name": "x", "weight": -1, "judge": "y"})
+
+
+from optimize.evalset import EvalSet, EvalTask
+
+
+def test_evaltask_from_dict_minimal():
+    t = EvalTask.from_dict({"id": "t1", "prompt": "do it",
+                            "dimensions": [{"name": "d", "judge": "good? 0-1"}]})
+    assert t.id == "t1"
+    assert t.pass_threshold == 0.6
+    assert len(t.dimensions) == 1
+
+
+def test_evaltask_requires_id_and_prompt():
+    with pytest.raises(ValueError, match="id"):
+        EvalTask.from_dict({"prompt": "x"})
+    with pytest.raises(ValueError, match="prompt"):
+        EvalTask.from_dict({"id": "t"})
+
+
+def test_evaltask_rejects_both_seed_modes():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        EvalTask.from_dict({"id": "t", "prompt": "p", "seed_dir": "s",
+                            "seed_repo": {"path": "r"}})
+
+
+def test_evalset_load_roundtrip(tmp_path):
+    src = {
+        "tasks": [
+            {"id": "t1", "prompt": "p1", "pass_threshold": 0.5,
+             "dimensions": [
+                 {"name": "tests", "weight": 3, "required": True,
+                  "rule": {"kind": "command", "cmd": "python x.py", "expect_exit": 0}},
+                 {"name": "clarity", "weight": 2, "judge": "clear? 0-1"}]},
+        ]
+    }
+    import yaml
+    p = tmp_path / "evalset.yaml"
+    p.write_text(yaml.safe_dump(src))
+
+    es = EvalSet.load(str(p))
+    assert len(es.tasks) == 1
+    t = es.tasks[0]
+    assert t.pass_threshold == 0.5
+    assert t.dimensions[0].required is True
+    assert t.dimensions[0].checks[0].cmd == "python x.py"
+    assert t.dimensions[1].judge == "clear? 0-1"
+
+    out = tmp_path / "out.yaml"
+    es.save(str(out))
+    es2 = EvalSet.load(str(out))
+    assert es2.tasks[0].dimensions[0].checks[0].cmd == "python x.py"
+    assert es2.tasks[0].dimensions[1].judge == "clear? 0-1"
+
+
+def test_evalset_load_rejects_empty(tmp_path):
+    p = tmp_path / "evalset.yaml"
+    p.write_text("tasks: []\n")
+    with pytest.raises(ValueError, match="no tasks"):
+        EvalSet.load(str(p))
+
+
+def test_evalset_load_wraps_bad_yaml(tmp_path):
+    p = tmp_path / "evalset.yaml"
+    p.write_text("tasks: [ : bad")
+    with pytest.raises(ValueError, match="evalset.yaml"):
+        EvalSet.load(str(p))
+
+
+def test_evalset_single_task_is_fine(tmp_path):
+    import yaml
+    p = tmp_path / "one.yaml"
+    p.write_text(yaml.safe_dump({"tasks": [
+        {"id": "solo", "prompt": "p", "dimensions": [{"name": "d", "judge": "ok? 0-1"}]}]}))
+    es = EvalSet.load(str(p))
+    assert len(es.tasks) == 1
