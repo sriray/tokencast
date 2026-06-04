@@ -28,6 +28,9 @@ TokenCast is the one-afternoon proof of that missing half.
   run`). The light tier (`tokencast.py`) never imports this; the two connect only via JSONL.
   Sub-project 1 of a planned closed-loop optimizer — see `docs/superpowers/specs/` and
   `docs/superpowers/plans/`.
+  Sub-project 2 adds the eval harness (`evalset`/`checks`/`sandbox`/`judge`/`scorer`/`evalrun`/
+  `generate` + `eval run`/`eval init`): score a config against an eval set (rule checks + LLM
+  judge) into a composite quality score with accurate cost/time.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30
