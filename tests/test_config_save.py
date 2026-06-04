@@ -32,3 +32,26 @@ def test_save_minimal_omits_empty_files(tmp_path):
     assert back.model == "sonnet"
     assert back.system_prompt_append == ""
     assert back.allowed_tools == []
+
+
+import os
+
+
+def test_save_clears_stale_optional_files(tmp_path):
+    dest = tmp_path / "c"
+    AgentConfig(config_id="x", model="sonnet", system_prompt_append="hi",
+                allowed_tools=["Read"]).save(str(dest))
+    assert os.path.exists(os.path.join(str(dest), "instructions.md"))
+    assert os.path.exists(os.path.join(str(dest), "tools.json"))
+    # re-save a minimal config to the SAME dir -> stale optional files must be removed
+    AgentConfig(config_id="x", model="haiku").save(str(dest))
+    assert not os.path.exists(os.path.join(str(dest), "instructions.md"))
+    assert not os.path.exists(os.path.join(str(dest), "tools.json"))
+    back = AgentConfig.load(str(dest))
+    assert back.model == "haiku"
+    assert back.system_prompt_append == "" and back.allowed_tools == []
+
+
+def test_save_persists_config_id(tmp_path):
+    AgentConfig(config_id="baseline-haiku", model="haiku").save(str(tmp_path / "c"))
+    assert AgentConfig.load(str(tmp_path / "c")).config_id == "baseline-haiku"

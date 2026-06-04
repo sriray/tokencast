@@ -123,9 +123,12 @@ class AgentConfig:
             meta["max_turns"] = self.max_turns
         with open(os.path.join(path, "metadata.yaml"), "w", encoding="utf-8") as fh:
             yaml.safe_dump(meta, fh, sort_keys=False)
+        instr_path = os.path.join(path, "instructions.md")
         if self.system_prompt_append:
-            with open(os.path.join(path, "instructions.md"), "w", encoding="utf-8") as fh:
+            with open(instr_path, "w", encoding="utf-8") as fh:
                 fh.write(self.system_prompt_append)
+        elif os.path.exists(instr_path):
+            os.remove(instr_path)
         tools = {}
         if self.allowed_tools:
             tools["allowed_tools"] = list(self.allowed_tools)
@@ -133,7 +136,10 @@ class AgentConfig:
             tools["disallowed_tools"] = list(self.disallowed_tools)
         if self.mcp_servers:
             tools["mcp_servers"] = dict(self.mcp_servers)
+        tools_path = os.path.join(path, "tools.json")
         if tools:
-            with open(os.path.join(path, "tools.json"), "w", encoding="utf-8") as fh:
+            with open(tools_path, "w", encoding="utf-8") as fh:
                 json.dump(tools, fh, indent=2)
+        elif os.path.exists(tools_path):
+            os.remove(tools_path)
         return path
