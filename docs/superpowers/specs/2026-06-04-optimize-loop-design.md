@@ -1,10 +1,16 @@
-# TokenCast Optimize Loop — Design Spec (sub-project 3 of 6)
+# TokenCast Optimize Loop (budget-aware) — Design Spec (sub-project 3b of 7)
 
 **Date:** 2026-06-04
 **Status:** Approved design, pending implementation plan
 **Depends on:** sub-project 1 (harness: `harness.run`, `RunResult`, `AgentConfig`, `pricing`,
-`tokencast.pct`) and sub-project 2 (eval harness: `run_evalset`, `EvalReport`, `EvalSet`).
-Both merged to `main`.
+`tokencast.pct`), sub-project 2 (eval harness: `run_evalset`, `EvalReport`, `EvalSet`), and
+sub-project 3a (budget core: `budget.runway_tasks`, `budget.BudgetConfig`, `budget.status`).
+All merged to `main`.
+
+**Note:** the optimize-loop *core* (candidates → cost-first ranking → repeats → promote) was
+approved before the budget core existed. This spec now also folds in the **budget-aware** delta
+(§6.1/§7.1/§8.1) — entirely optional: with no budget supplied, the loop behaves exactly as the
+approved lean core. The two halves (optimize + budget) meet here.
 
 ---
 
@@ -53,6 +59,12 @@ for recurring work, large tasks, or optimize-on-a-slice (per the sub-project 2 s
   runs with zero API spend and no SDK installed.
 - **Cost always derives from accurate `RunResult` tokens via `pricing`** (never the SDK's own
   number), carried up through `EvalReport`.
+- **Budget-awareness is optional and additive** (the budget+optimize meeting point): when a
+  remaining budget is supplied, the loop frames the winner-vs-baseline win as **runway gained**
+  (tasks affordable) and, with `--need-tasks N`, reports whether *N* tasks fit. With no budget
+  supplied, none of this appears and the loop is byte-for-byte the lean core. The loop takes a
+  plain `budget_remaining: float | None` number (the **CLI** resolves it from the budget ledger),
+  keeping `loop.py`/`ranking.py` decoupled from `budget.py` except for the pure `runway_tasks` helper.
 
 ---
 
@@ -69,6 +81,9 @@ optimize/cli.py          MODIFY: add the `optimize` subcommand
 
 `ranking.py` is pure (no eval, no I/O beyond `to_json`) so the heart of the loop is fully
 unit-testable. `optimize/` may import `tokencast`; the light tier never imports `optimize/`.
+For the budget-aware pass (§6.1) `ranking.py` also imports the pure stdlib helper
+`budget.runway_tasks` (heavy→light is allowed); the `optimize` CLI imports `budget` to resolve
+the remaining budget from the ledger. Neither couples the light tier to `optimize/`.
 
 ---
 
@@ -112,10 +127,15 @@ CandidateResult:
   cost_max: float
   quality_min: float
   quality_max: float
+  # budget-aware fields, populated only when a remaining budget is supplied (else None):
+  runway: Optional[int] = None    # budget.runway_tasks(budget_remaining, cost_usd)
+  fits: Optional[bool] = None     # cost_usd * need_tasks <= budget_remaining (only with --need-tasks)
 ```
 
 With `repeats=1`, median/p90 equal the single value and min==max. `ranking.aggregate(config_id,
 reports) -> CandidateResult` is a pure function (list of EvalReports in, CandidateResult out).
+`runway`/`fits` are filled in by a separate pure pass (§6.1) once `budget_remaining` is known, so
+`aggregate` itself stays budget-agnostic.
 
 ---
 
@@ -143,22 +163,45 @@ OptimizeResult:
   # convenience deltas vs baseline, computed for the winner:
   cost_delta_pct: float          # (winner.cost - baseline.cost)/baseline.cost * 100
   quality_delta: float           # winner.quality - baseline.quality
+  # budget-aware fields, populated only when a remaining budget is supplied (else None):
+  budget_remaining: Optional[float] = None
+  need_tasks: Optional[int] = None
+  runway_gain: Optional[int] = None     # winner.runway - baseline.runway
+  winner_fits: Optional[bool] = None    # winner.fits (only with need_tasks)
 ```
 `OptimizeResult.to_json(path)` via `dataclasses.asdict`.
+
+---
+
+## 6.1 Budget-awareness (pure, in `ranking.py`)
+
+A pure pass applied after `select`, only when `budget_remaining is not None`:
+- For each `CandidateResult`: `runway = budget.runway_tasks(budget_remaining, cost_usd)` (reuses
+  the 3a stdlib helper — `ranking.py` importing `budget` is the only heavy→light coupling, and
+  `runway_tasks` is pure). With `need_tasks` given: `fits = (cost_usd * need_tasks) <= budget_remaining`.
+- On `OptimizeResult`: `budget_remaining`, `need_tasks`, `runway_gain = winner.runway -
+  baseline.runway`, and `winner_fits = winner.fits` (when `need_tasks` given).
+- Selection is **unchanged** by budget/`need_tasks`: the cost-first winner is already the cheapest
+  config meeting the quality floor, hence the one most likely to fit. `need_tasks` is a *verdict*
+  layer (does the winner make N tasks fit?), not a re-ranking — if even the cheapest acceptable
+  config doesn't fit, nothing acceptable does, and the report says so with the shortfall.
+- When `budget_remaining is None`, this pass is skipped and all budget fields stay `None`.
 
 ---
 
 ## 7. The loop + promote (`optimize/loop.py`)
 
 `run_optimize(baseline, candidates, evalset, *, runner=None, judge=None, repeats=1,
-min_quality=None, by="cost", out_dir="runs", promote_to=None) -> OptimizeResult`:
+min_quality=None, by="cost", out_dir="runs", promote_to=None, budget_remaining=None,
+need_tasks=None) -> OptimizeResult`:
 
 1. Build the full candidate list: `[baseline] + candidates`, de-duplicated by `config_id`
    (baseline always first/kept).
 2. For each: eval `repeats` times via `run_evalset`; `ranking.aggregate` → `CandidateResult`.
    A candidate whose runs all fail still yields a `CandidateResult` (quality 0) — `run_evalset`
    already isolates per-task failures, so a bad candidate can't abort the whole loop.
-3. `floor`, `pareto`, `select` → `OptimizeResult` (with deltas). Write `out_dir/optimize.json`.
+3. `floor`, `pareto`, `select` → `OptimizeResult` (with deltas). Then, if `budget_remaining` is
+   not None, apply the §6.1 budget pass (runway / fits / runway_gain). Write `out_dir/optimize.json`.
 4. **Promote:** always `AgentConfig.save` the winner's config to `out_dir/promoted/`. If
    `promote_to` is set, also `AgentConfig.save` it there. (The winner's `AgentConfig` is found
    by `config_id` from the candidate list.)
@@ -176,6 +219,7 @@ fake judge.
 tokencast-optimize optimize EVALSET --config BASELINE_DIR
     [--candidate DIR ...] [--model-sweep] [--repeats N] [--min-quality Q]
     [--by cost|time] [--out DIR] [--promote DEST] [--history PATH] [--yes]
+    [--budget-remaining USD | (--budget-config FILE --budget-scope SCOPE)] [--need-tasks N]
 ```
 - Validate paths (eval set is a file, baseline config is a dir, each `--candidate` is a dir),
   failing cleanly with `SystemExit` (consistent with `eval run`).
@@ -186,6 +230,20 @@ tokencast-optimize optimize EVALSET --config BASELINE_DIR
 - Run `run_optimize`; print a ranked table to stdout — columns: config_id, quality, p90 cost
   (`_fmt_cost`), time, pass-rate, with `*` on the winner and `+` on Pareto members — then the
   winner-vs-baseline delta line and the `optimize.json` / promoted-dir paths.
+
+### 8.1 Budget-aware CLI (optional)
+
+- **Resolving `budget_remaining`** (mutually exclusive, both optional):
+  - `--budget-remaining USD` — a direct number.
+  - `--budget-config FILE --budget-scope SCOPE` — the CLI calls `budget.BudgetConfig.load(FILE)`
+    + `budget.status(cfg, scope, budget.collect_spend(...), today).remaining` to resolve it.
+  - Neither → `budget_remaining=None` → no budget output (lean behavior).
+- `--need-tasks N` requires a budget (error cleanly via `SystemExit` if given without one).
+- When a budget is supplied, the ranked table gains a **runway** column (tasks affordable per
+  candidate), and after the delta line the CLI prints the **runway gain** ("winner: 1,428 tasks
+  vs baseline 830 — +598 tasks, same budget"). With `--need-tasks N`, it prints the fit verdict
+  for the winner ("makes N tasks fit: YES, $Z headroom" / "NO, short by $Z").
+- With no budget flags, none of this prints — identical to the lean core.
 
 ---
 
@@ -211,6 +269,12 @@ tokencast-optimize optimize EVALSET --config BASELINE_DIR
   winner is the cheapest meeting the floor, that `optimize.json` + `promoted/` are written, and
   that a quality floor correctly excludes a cheap-but-bad candidate.
 - CLI `optimize`: monkeypatched `run_optimize`, path-validation, ranked-table output, abort path.
+- **Budget-awareness:** the §6.1 pass tested as a pure function — `runway`/`fits`/`runway_gain`
+  populated from a plain `budget_remaining` number (zero spend, no budget config needed); and the
+  `budget_remaining=None` case asserts all budget fields stay `None` and output is unchanged
+  (optionality guard). CLI: `--budget-remaining` produces a runway column + gain line;
+  `--need-tasks` without a budget errors cleanly; `--budget-config/--budget-scope` resolution
+  tested with a tiny budget config.
 - One opt-in live smoke gated by `TOKENCAST_LIVE=1` (baseline + model sweep on a one-task set,
   tiny budget).
 - Whole suite runs with zero API spend and no `claude-agent-sdk` installed.
@@ -233,4 +297,8 @@ tokencast-optimize optimize EVALSET --config BASELINE_DIR
 - A cheaper candidate that drops below the quality floor is correctly NOT chosen.
 - `--repeats N` ranks on median quality / p90 cost and reports the spread.
 - `--promote DEST` writes the winner to DEST; without it, the live config is untouched.
+- **Budget-aware:** with `--budget-remaining` (or `--budget-config/--budget-scope`), the ranked
+  table shows per-candidate runway and the report states the runway gained (winner vs baseline);
+  `--need-tasks N` reports whether the winner makes N tasks fit. With **no** budget flags, the
+  output is identical to the lean core (optionality).
 - The whole suite passes with zero API spend and no SDK installed.
