@@ -66,3 +66,44 @@ def test_cmd_eval_init_writes_draft(tmp_path, monkeypatch, capsys):
     assert loaded.tasks[0].id == "g1"
     err = capsys.readouterr().err
     assert "REVIEW" in err.upper()
+
+
+def test_cmd_eval_run_aborts_on_decline(tmp_path, monkeypatch, capsys):
+    cfg = tmp_path / "baseline"
+    cfg.mkdir()
+    (cfg / "metadata.yaml").write_text("model: sonnet\n")
+    evalset_path = tmp_path / "evalset.yaml"
+    evalset_path.write_text(yaml.safe_dump({"tasks": [
+        {"id": "t1", "prompt": "p", "dimensions": [{"name": "d", "judge": "ok? 0-1"}]}]}))
+
+    called = {"ran": False}
+
+    def spy_run_evalset(evalset, config, out_dir):
+        called["ran"] = True
+        raise AssertionError("run_evalset must not be called after a declined confirmation")
+
+    monkeypatch.setattr(cli, "run_evalset", spy_run_evalset)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+
+    import types
+    args = types.SimpleNamespace(evalset=str(evalset_path), config=str(cfg),
+                                 out=str(tmp_path / "runs"),
+                                 history=str(tmp_path / "no_history"), yes=False)
+    cli.cmd_eval_run(args)
+    assert called["ran"] is False
+    assert "Aborted" in capsys.readouterr().out
+
+
+def test_cmd_eval_run_rejects_malformed_evalset(tmp_path):
+    import pytest
+    import types
+    cfg = tmp_path / "baseline"
+    cfg.mkdir()
+    (cfg / "metadata.yaml").write_text("model: sonnet\n")
+    bad = tmp_path / "evalset.yaml"
+    bad.write_text("tasks: []\n")  # valid YAML, but no tasks -> EvalSet.load raises ValueError
+    args = types.SimpleNamespace(evalset=str(bad), config=str(cfg),
+                                 out=str(tmp_path / "runs"),
+                                 history=str(tmp_path / "no_history"), yes=True)
+    with pytest.raises(SystemExit):
+        cli.cmd_eval_run(args)

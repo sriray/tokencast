@@ -80,14 +80,17 @@ def cmd_eval_run(args):
     if not os.path.isdir(args.config):
         raise SystemExit(f"tokencast-optimize: config dir not found: {args.config}")
 
-    evalset = EvalSet.load(args.evalset)
+    try:
+        evalset = EvalSet.load(args.evalset)
+    except (ValueError, RuntimeError) as e:
+        raise SystemExit(f"tokencast-optimize: {e}")
     config = AgentConfig.load(args.config)
     n_tasks = len(evalset.tasks)
 
     hist_n, p90 = estimate_cost(args.history)
     if p90 is not None:
-        print(f"Pre-flight: {n_tasks} tasks; est. total p90 ~ {_fmt_cost(p90 * n_tasks)} "
-              f"(modeled at list prices)", file=sys.stderr)
+        print(f"Pre-flight: {n_tasks} task(s); est. total ~ {_fmt_cost(p90 * n_tasks)} "
+              f"(per-task p90 x {n_tasks}, modeled at list prices)", file=sys.stderr)
     else:
         print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
               file=sys.stderr)
