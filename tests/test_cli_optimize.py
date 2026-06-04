@@ -32,7 +32,7 @@ def _args(tmp_path, **kw):
                 out=str(tmp_path / "runs"), promote=None,
                 history=str(tmp_path / "no_history"), yes=True,
                 budget_remaining=None, budget_config=None, budget_scope="global",
-                need_tasks=None)
+                need_tasks=None, generate=0)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -90,3 +90,32 @@ def test_cmd_optimize_renders_need_tasks_fit_verdict(tmp_path, monkeypatch, caps
     assert "fit" in out                      # per-candidate fit tag (fit / !fit)
     assert "Need 800 tasks" in out           # fit-verdict line
     assert "winner fits: YES" in out         # winner_fits=True -> YES
+
+
+def test_cmd_optimize_passes_generate_through(tmp_path, monkeypatch, capsys):
+    captured = {}
+
+    def fake_run_optimize(*a, **k):
+        captured.update(k)
+        return OptimizeResult(baseline_id="baseline", floor=0.8, winner_id="baseline",
+                              improved=False, candidates=[_cr("baseline", 0.8, 0.02)],
+                              pareto=["baseline"], cost_delta_pct=0.0, quality_delta=0.0)
+
+    monkeypatch.setattr(cli, "run_optimize", fake_run_optimize)
+    cli.cmd_optimize(_args(tmp_path, generate=2, model_sweep=False))
+    assert captured["n_generated"] == 2
+    assert "baseline" in capsys.readouterr().out
+
+
+def test_cmd_optimize_negative_generate_clamped(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run_optimize(*a, **k):
+        captured.update(k)
+        return OptimizeResult(baseline_id="baseline", floor=0.8, winner_id="baseline",
+                              improved=False, candidates=[_cr("baseline", 0.8, 0.02)],
+                              pareto=["baseline"], cost_delta_pct=0.0, quality_delta=0.0)
+
+    monkeypatch.setattr(cli, "run_optimize", fake_run_optimize)
+    cli.cmd_optimize(_args(tmp_path, generate=-5, model_sweep=False))
+    assert captured["n_generated"] == 0   # negative clamped to 0
