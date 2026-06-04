@@ -7,8 +7,13 @@ sample_logs/
 # python
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
 .venv/
 venv/
+
+# optimizer run outputs
+runs/
 
 # os / editor
 .DS_Store
