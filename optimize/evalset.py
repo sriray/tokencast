@@ -50,6 +50,8 @@ class Check:
             out["path"] = self.path
             if self.kind == "file_contains":
                 out["pattern"] = self.pattern
+        if self.timeout != 120:
+            out["timeout"] = self.timeout
         return out
 
 
@@ -70,10 +72,15 @@ class Dimension:
         name = d.get("name")
         if not name:
             raise ValueError("dimension requires 'name'")
-        has_rule = "rule" in d
-        has_judge = "judge" in d
+        rule_val = d.get("rule")
+        judge_val = d.get("judge")
+        has_rule = rule_val is not None
+        has_judge = judge_val is not None
         if has_rule == has_judge:
             raise ValueError(f"dimension {name!r} must have exactly one of 'rule' or 'judge'")
+        weight = float(d.get("weight", 1.0))
+        if weight < 0:
+            raise ValueError(f"dimension {name!r}: weight must be >= 0")
         required = bool(d.get("required", False))
         if has_judge and required:
             warnings.warn(
@@ -81,11 +88,12 @@ class Dimension:
                 "(judges rarely score exactly 1.0)", UserWarning)
         checks = []
         if has_rule:
-            rule = d["rule"]
-            items = rule if isinstance(rule, list) else [rule]
+            items = rule_val if isinstance(rule_val, list) else [rule_val]
             checks = [Check.from_dict(c) for c in items]
-        return cls(name=name, weight=float(d.get("weight", 1.0)), required=required,
-                   checks=checks, judge=d.get("judge"))
+            if not checks:
+                raise ValueError(f"dimension {name!r}: rule must have at least one check")
+        return cls(name=name, weight=weight, required=required,
+                   checks=checks, judge=judge_val)
 
     def to_dict(self):
         out = {"name": self.name, "weight": self.weight}

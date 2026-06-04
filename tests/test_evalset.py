@@ -51,3 +51,36 @@ def test_dimension_requires_exactly_one_of_rule_or_judge():
 def test_dimension_required_on_judge_warns():
     with pytest.warns(UserWarning, match="required"):
         Dimension.from_dict({"name": "x", "required": True, "judge": "y"})
+
+
+def test_check_to_dict_preserves_timeout_and_expect_exit():
+    c = Check.from_dict({"kind": "command", "cmd": "pytest", "timeout": 300,
+                         "expect_exit": 2})
+    d = c.to_dict()
+    assert d["timeout"] == 300
+    assert d["expect_exit"] == 2
+    # round-trips
+    c2 = Check.from_dict(d)
+    assert c2.timeout == 300 and c2.expect_exit == 2
+
+
+def test_check_to_dict_omits_default_timeout():
+    d = Check.from_dict({"kind": "command", "cmd": "pytest"}).to_dict()
+    assert "timeout" not in d  # default not serialized
+
+
+def test_dimension_rejects_null_rule_or_judge():
+    with pytest.raises(ValueError, match="exactly one"):
+        Dimension.from_dict({"name": "x", "judge": None})
+    with pytest.raises(ValueError, match="exactly one"):
+        Dimension.from_dict({"name": "x", "rule": None})
+
+
+def test_dimension_rejects_empty_rule():
+    with pytest.raises(ValueError, match="at least one check"):
+        Dimension.from_dict({"name": "x", "rule": []})
+
+
+def test_dimension_rejects_negative_weight():
+    with pytest.raises(ValueError, match="weight"):
+        Dimension.from_dict({"name": "x", "weight": -1, "judge": "y"})
