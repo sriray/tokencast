@@ -90,3 +90,28 @@ def test_run_optimize_all_failed_keeps_baseline(tmp_path):
                        judge=lambda p: 1.0, out_dir=str(out))
     assert res.winner_id == "baseline"   # nothing actually ran -> keep baseline
     assert res.improved is False
+
+
+def test_run_optimize_uses_generator(tmp_path):
+    baseline = _baseline(tmp_path)
+
+    def fake_gen(prompt):
+        return [{"system_prompt_append": "fixed instructions"}]
+
+    out = tmp_path / "runs"
+    res = run_optimize(baseline, [], _evalset(), runner=_runner_cost_by_model,
+                       judge=lambda p: 1.0, out_dir=str(out),
+                       generator=fake_gen, n_generated=1)
+    ids = [c.config_id for c in res.candidates]
+    assert "baseline" in ids and "baseline-gen1" in ids   # generated candidate was evaluated
+    assert (out / "baseline-gen1").exists()                # its run dir was created
+
+
+def test_run_optimize_no_generator_unchanged(tmp_path):
+    baseline = _baseline(tmp_path)
+    cands = model_sweep(baseline)
+    out = tmp_path / "runs"
+    res = run_optimize(baseline, cands, _evalset(), runner=_runner_cost_by_model,
+                       judge=lambda p: 1.0, out_dir=str(out))   # no generator
+    assert res.winner_id == "baseline-haiku"
+    assert all("gen" not in c.config_id for c in res.candidates)
