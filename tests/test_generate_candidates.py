@@ -56,6 +56,13 @@ def test_generate_candidates_empty_and_cap():
     assert len(three) == 2
 
 
+def test_generate_candidates_non_list_return_is_empty():
+    baseline = AgentConfig(config_id="b", model="sonnet")
+    # a misbehaving generator returns a dict instead of a list -> treat as no candidates
+    assert generate_candidates(baseline, [_report_with_failure()], n=2,
+                               generator=lambda p: {"oops": 1}) == []
+
+
 def test_build_candidate_prompt_includes_failures_and_instructions():
     baseline = AgentConfig(config_id="b", model="sonnet", system_prompt_append="BE TERSE")
     prompt = _build_candidate_prompt(baseline, [_report_with_failure()], 2)

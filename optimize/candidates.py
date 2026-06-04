@@ -85,6 +85,8 @@ def generate_candidates(baseline, baseline_reports, *, n=2, generator=None):
     generator = generator or _default_candidate_generator
     prompt = _build_candidate_prompt(baseline, baseline_reports, n)
     mutations = generator(prompt) or []
+    if not isinstance(mutations, list):
+        mutations = []
     out = []
     for i, mut in enumerate(mutations[:n]):
         if isinstance(mut, dict):
