@@ -8,13 +8,20 @@ _DEFAULT_MODELS = ("opus", "sonnet", "haiku")
 
 
 def model_sweep(baseline, models=_DEFAULT_MODELS):
-    """One variant per model, skipping the baseline's own model (a redundant re-eval)."""
+    """One variant per model, skipping the baseline's own model (a redundant re-eval).
+
+    Models are de-duplicated (order-preserving) so config_ids stay unique, and each variant
+    gets fresh copies of the mutable collections so it never aliases the baseline's.
+    """
     out = []
-    for m in models:
+    for m in dict.fromkeys(models):
         if m == baseline.model:
             continue
-        out.append(dataclasses.replace(baseline, model=m,
-                                       config_id=f"{baseline.config_id}-{m}"))
+        out.append(dataclasses.replace(
+            baseline, model=m, config_id=f"{baseline.config_id}-{m}",
+            allowed_tools=list(baseline.allowed_tools),
+            disallowed_tools=list(baseline.disallowed_tools),
+            mcp_servers=dict(baseline.mcp_servers)))
     return out
 
 

@@ -18,6 +18,22 @@ def test_model_sweep_custom_models():
     assert [v.config_id for v in variants] == ["b-haiku"]   # opus == baseline, skipped
 
 
+def test_model_sweep_dedups_models():
+    baseline = AgentConfig(config_id="b", model="sonnet")
+    variants = model_sweep(baseline, models=("opus", "opus", "haiku"))
+    assert [v.config_id for v in variants] == ["b-opus", "b-haiku"]   # deduped, order kept
+
+
+def test_model_sweep_variants_do_not_alias_baseline_collections():
+    baseline = AgentConfig(config_id="b", model="sonnet", allowed_tools=["Read"],
+                           mcp_servers={"pw": {"command": "npx"}})
+    v = model_sweep(baseline)[0]
+    v.allowed_tools.append("Write")
+    v.mcp_servers["x"] = {}
+    assert baseline.allowed_tools == ["Read"]              # baseline unaffected
+    assert baseline.mcp_servers == {"pw": {"command": "npx"}}
+
+
 def test_from_dirs_loads_configs(tmp_path):
     d = tmp_path / "c1"
     d.mkdir()
