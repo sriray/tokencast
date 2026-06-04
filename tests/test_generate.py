@@ -32,3 +32,25 @@ def test_generate_evalset_uses_injected_generator():
     assert seen["context"] == "some context"
     assert len(es.tasks) == 1
     assert es.tasks[0].id == "g1"
+
+
+import pytest
+
+
+def test_gather_context_truncation_marker(tmp_path):
+    for i in range(3):
+        (tmp_path / f"f{i}.py").write_text("x\n")
+    ctx = gather_context(root=str(tmp_path), max_files=1)
+    assert "truncated at 1 of" in ctx
+
+
+def test_generate_evalset_rejects_empty_output():
+    with pytest.raises(ValueError):
+        generate_evalset("ctx", generator=lambda c: {"tasks": []})
+
+
+def test_generate_evalset_validates_malformed_task():
+    bad = {"tasks": [{"id": "t", "prompt": "p", "dimensions": [
+        {"name": "d", "rule": {"kind": "file_exists", "path": "a"}, "judge": "both bad"}]}]}
+    with pytest.raises(ValueError):
+        generate_evalset("ctx", generator=lambda c: bad)

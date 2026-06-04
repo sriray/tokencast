@@ -17,16 +17,18 @@ def gather_context(root=".", claude_md="CLAUDE.md", max_files=200):
     if os.path.isfile(cm):
         with open(cm, encoding="utf-8", errors="ignore") as fh:
             parts.append("# CLAUDE.md\n" + fh.read())
-    listing = []
+    all_paths = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS]
         for f in filenames:
-            listing.append(os.path.relpath(os.path.join(dirpath, f), root))
-            if len(listing) >= max_files:
-                break
-        if len(listing) >= max_files:
-            break
-    parts.append("# Files\n" + "\n".join(sorted(listing)))
+            all_paths.append(os.path.relpath(os.path.join(dirpath, f), root))
+    all_paths.sort()
+    total = len(all_paths)
+    shown = all_paths[:max_files]
+    listing = "# Files\n" + "\n".join(shown)
+    if total > max_files:
+        listing += f"\n... (truncated at {max_files} of {total} files)"
+    parts.append(listing)
     return "\n\n".join(parts)
 
 
