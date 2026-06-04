@@ -2,7 +2,7 @@
 selection. No eval; no I/O beyond to_json. (The budget pass is added in a later task.)"""
 import dataclasses
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 import tokencast
