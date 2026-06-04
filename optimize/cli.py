@@ -8,6 +8,9 @@ import sys
 import tokencast
 from optimize.config import AgentConfig
 from optimize.harness import run as run_task
+from optimize.evalset import EvalSet
+from optimize.evalrun import run_evalset
+from optimize.generate import gather_context, generate_evalset
 
 
 def _fmt_cost(x):
@@ -71,6 +74,54 @@ def cmd_run(args):
     print(f"  Inspect   python tokencast.py report {args.out}")
 
 
+def cmd_eval_run(args):
+    if not os.path.isfile(args.evalset):
+        raise SystemExit(f"tokencast-optimize: eval set not found: {args.evalset}")
+    if not os.path.isdir(args.config):
+        raise SystemExit(f"tokencast-optimize: config dir not found: {args.config}")
+
+    evalset = EvalSet.load(args.evalset)
+    config = AgentConfig.load(args.config)
+    n_tasks = len(evalset.tasks)
+
+    hist_n, p90 = estimate_cost(args.history)
+    if p90 is not None:
+        print(f"Pre-flight: {n_tasks} tasks; est. total p90 ~ {_fmt_cost(p90 * n_tasks)} "
+              f"(modeled at list prices)", file=sys.stderr)
+    else:
+        print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
+              file=sys.stderr)
+
+    if not args.yes:
+        resp = input(
+            "Proceed (real spend: dollars or plan credits)? [y/N] ").strip().lower()
+        if resp not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    report = run_evalset(evalset, config, out_dir=args.out)
+
+    print("=" * 60)
+    print(f"Eval: {n_tasks} task(s) / config {report.config_id}")
+    print(f"  Composite  {report.composite * 100:.0f}%    "
+          f"Pass rate  {report.pass_rate * 100:.0f}%")
+    print(f"  Cost       {_fmt_cost(report.total_cost_usd)}    "
+          f"Duration  {report.total_duration_ms / 1000:.1f}s")
+    print(f"  Report     {os.path.join(args.out, 'report.json')}")
+
+
+def cmd_eval_init(args):
+    context = gather_context(root=args.root)
+    evalset = generate_evalset(context)
+    os.makedirs(args.out, exist_ok=True)
+    path = os.path.join(args.out, "evalset.yaml")
+    evalset.save(path)
+    print(f"Draft eval set written to {path}", file=sys.stderr)
+    print("REVIEW BEFORE RUNNING: generated rule checks are LLM-authored shell commands.",
+          file=sys.stderr)
+    print(path)
+
+
 def main():
     ap = argparse.ArgumentParser(prog="tokencast-optimize",
                                  description="TokenCast optimizer (Agent SDK tier)")
@@ -86,6 +137,23 @@ def main():
     r.add_argument("--out", default="./runs", help="directory to write the result JSONL")
     r.add_argument("--yes", action="store_true", help="skip the proceed confirmation")
     r.set_defaults(func=cmd_run)
+
+    e = sub.add_parser("eval", help="evaluate a config against an eval set")
+    esub = e.add_subparsers(dest="eval_cmd", required=True)
+
+    er = esub.add_parser("run", help="run an eval set under one config, scored")
+    er.add_argument("evalset", help="path to an evalset.yaml")
+    er.add_argument("--config", required=True, help="path to a config dir")
+    er.add_argument("--out", default="./runs", help="directory for run logs + report.json")
+    er.add_argument("--history", default=os.path.expanduser("~/.claude/projects"),
+                    help="historical logs for the pre-flight estimate")
+    er.add_argument("--yes", action="store_true", help="skip the proceed confirmation")
+    er.set_defaults(func=cmd_eval_run)
+
+    ei = esub.add_parser("init", help="draft an eval set from the repo (LLM, review before use)")
+    ei.add_argument("--root", default=".", help="project root to read context from")
+    ei.add_argument("--out", default="evals/generated", help="dir to write the draft evalset.yaml")
+    ei.set_defaults(func=cmd_eval_init)
 
     args = ap.parse_args()
     args.func(args)
