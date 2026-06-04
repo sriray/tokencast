@@ -71,3 +71,59 @@ def test_cmd_run_writes_jsonl_and_summary(tmp_path, monkeypatch, capsys):
     assert out_file.exists()
     captured = capsys.readouterr()
     assert "$0.01" in captured.out  # cost summary printed
+
+
+import types
+
+import pytest
+
+
+def _basic_config(tmp_path):
+    cfg = tmp_path / "baseline"
+    cfg.mkdir()
+    (cfg / "metadata.yaml").write_text("model: sonnet\n")
+    return cfg
+
+
+def test_cmd_run_rejects_missing_config(tmp_path):
+    taskfile = tmp_path / "t.md"
+    taskfile.write_text("x")
+    args = types.SimpleNamespace(
+        taskfile=str(taskfile), config=str(tmp_path / "does_not_exist"),
+        cwd=None, budget=None, history=str(tmp_path / "no_history"),
+        out=str(tmp_path / "runs"), yes=True)
+    with pytest.raises(SystemExit):
+        cli.cmd_run(args)
+    assert not (tmp_path / "runs").exists()  # bailed before any run/output
+
+
+def test_cmd_run_rejects_missing_taskfile(tmp_path):
+    cfg = _basic_config(tmp_path)
+    args = types.SimpleNamespace(
+        taskfile=str(tmp_path / "missing.md"), config=str(cfg),
+        cwd=None, budget=None, history=str(tmp_path / "no_history"),
+        out=str(tmp_path / "runs"), yes=True)
+    with pytest.raises(SystemExit):
+        cli.cmd_run(args)
+
+
+def test_subcent_cost_is_not_displayed_as_zero(tmp_path, monkeypatch, capsys):
+    cfg = _basic_config(tmp_path)
+    taskfile = tmp_path / "t.md"
+    taskfile.write_text("x")
+    canned = RunResult(
+        task_id="t", config_id="baseline",
+        model_usage={"claude-sonnet-4-6": {"input_tokens": 100, "output_tokens": 50,
+                                           "cache_creation_input_tokens": 0,
+                                           "cache_read_input_tokens": 0}},
+        cost_usd=0.0049, duration_ms=500, num_turns=1,
+        transcript=[{"model": "claude-sonnet-4-6", "content": []}],
+        final_output="d", files_changed=[], accurate=True)
+    monkeypatch.setattr(cli, "run_task", lambda task, config: canned)
+    args = types.SimpleNamespace(
+        taskfile=str(taskfile), config=str(cfg), cwd=None, budget=None,
+        history=str(tmp_path / "no_history"), out=str(tmp_path / "runs"), yes=True)
+    cli.cmd_run(args)
+    out = capsys.readouterr().out
+    assert "$0.0049" in out          # precise, not collapsed to $0.00
+    assert "$0.00 " not in out       # the misleading rounding must not appear

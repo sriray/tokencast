@@ -10,6 +10,12 @@ from optimize.config import AgentConfig
 from optimize.harness import run as run_task
 
 
+def _fmt_cost(x):
+    """Cost formatter that does not collapse sub-cent amounts to $0.00 — this tier's
+    whole value is precision. Shows 4 decimals under $1, else standard 2-decimal money()."""
+    return f"${x:,.4f}" if abs(x) < 1 else tokencast.money(x)
+
+
 def estimate_cost(history_path):
     """Rough pre-flight: p90 of historical session costs. Returns (n_sessions, p90 | None).
     Richer kNN-matched forecasting arrives with the optimize loop sub-project."""
@@ -21,6 +27,10 @@ def estimate_cost(history_path):
 
 
 def cmd_run(args):
+    if not os.path.isfile(args.taskfile):
+        raise SystemExit(f"tokencast-optimize: taskfile not found: {args.taskfile}")
+    if not os.path.isdir(args.config):
+        raise SystemExit(f"tokencast-optimize: config dir not found: {args.config}")
     with open(args.taskfile) as fh:
         prompt = fh.read()
     task_id = os.path.splitext(os.path.basename(args.taskfile))[0]
@@ -32,7 +42,7 @@ def cmd_run(args):
 
     n, p90 = estimate_cost(args.history)
     if p90 is not None:
-        print(f"Pre-flight: {n} past sessions; p90 cost ~ {tokencast.money(p90)} "
+        print(f"Pre-flight: {n} past sessions; p90 cost ~ {_fmt_cost(p90)} "
               f"(modeled at list prices)", file=sys.stderr)
         if config.budget_usd is not None and p90 > config.budget_usd:
             print(f"  ! p90 estimate exceeds budget {tokencast.money(config.budget_usd)}",
@@ -54,7 +64,7 @@ def cmd_run(args):
 
     print("=" * 60)
     print(f"Task {result.task_id} / config {result.config_id}")
-    print(f"  Cost      {tokencast.money(result.cost_usd)}  (accurate token counts)")
+    print(f"  Cost      {_fmt_cost(result.cost_usd)}  (accurate token counts)")
     print(f"  Duration  {result.duration_ms / 1000:.1f}s   "
           f"Turns {result.num_turns}   Files {len(result.files_changed)}")
     print(f"  Log       {out_path}")
