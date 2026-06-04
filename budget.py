@@ -55,12 +55,20 @@ class BudgetConfig:
         if not isinstance(raw, list) or not raw:
             raise ValueError(f"{path}: 'budgets' must be a non-empty list")
         budgets = []
+        seen_scopes = set()
         for b in raw:
+            if not isinstance(b, dict):
+                raise ValueError(f"{path}: each budget must be an object, got {b!r}")
             scope = b.get("scope")
-            if scope != "global" and not (
-                    isinstance(scope, str) and scope.startswith("project:")):
+            valid_scope = scope == "global" or (
+                isinstance(scope, str) and scope.startswith("project:")
+                and len(scope) > len("project:"))
+            if not valid_scope:
                 raise ValueError(
                     f"{path}: scope must be 'global' or 'project:<name>', got {scope!r}")
+            if scope in seen_scopes:
+                raise ValueError(f"{path}: duplicate scope {scope!r}")
+            seen_scopes.add(scope)
             amount = b.get("amount")
             if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount < 0:
                 raise ValueError(

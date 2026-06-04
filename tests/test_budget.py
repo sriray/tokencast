@@ -59,3 +59,39 @@ def test_amount_for_unknown_scope_raises(tmp_path):
     cfg = BudgetConfig.load(path)
     with pytest.raises(ValueError, match="not in budget config"):
         cfg.amount_for("project:ghost")
+
+
+def test_load_rejects_non_dict_entry(tmp_path):
+    path = _write(tmp_path, {"period": "monthly", "period_start": "2026-04-01",
+                             "budgets": ["global"]})
+    with pytest.raises(ValueError, match="must be an object"):
+        BudgetConfig.load(path)
+
+
+def test_load_rejects_empty_project_scope(tmp_path):
+    path = _write(tmp_path, {"period": "monthly", "period_start": "2026-04-01",
+                             "budgets": [{"scope": "project:", "amount": 1}]})
+    with pytest.raises(ValueError, match="scope"):
+        BudgetConfig.load(path)
+
+
+def test_load_rejects_duplicate_scopes(tmp_path):
+    path = _write(tmp_path, {"period": "monthly", "period_start": "2026-04-01",
+                             "budgets": [{"scope": "global", "amount": 1},
+                                         {"scope": "global", "amount": 2}]})
+    with pytest.raises(ValueError, match="duplicate"):
+        BudgetConfig.load(path)
+
+
+def test_load_rejects_bool_amount(tmp_path):
+    path = _write(tmp_path, {"period": "monthly", "period_start": "2026-04-01",
+                             "budgets": [{"scope": "global", "amount": True}]})
+    with pytest.raises(ValueError, match="amount"):
+        BudgetConfig.load(path)
+
+
+def test_load_rejects_malformed_json(tmp_path):
+    p = tmp_path / "tokencast_budget.json"
+    p.write_text("{ not valid json ")
+    with pytest.raises(ValueError, match="tokencast_budget.json"):
+        BudgetConfig.load(str(p))
