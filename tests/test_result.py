@@ -64,3 +64,58 @@ def test_to_jsonl_handles_zero_turns(tmp_path):
     rr.to_jsonl(str(path))
     sess = tokencast.parse_session(str(path))
     assert abs(sess["cost"] - rr.cost_usd) < 1e-6
+
+
+import pytest
+
+
+def test_to_jsonl_rejects_multi_model(tmp_path):
+    # The JSONL bridge assumes one model per run; multi-model must fail loudly,
+    # not silently misprice. (RunResult.cost_usd stays correct; only to_jsonl guards.)
+    raw = {
+        "turns": [{"model": "claude-opus-4-8", "content": []}],
+        "result": {
+            "model_usage": {
+                "claude-opus-4-8": {"input_tokens": 1000, "output_tokens": 100,
+                                    "cache_creation_input_tokens": 0,
+                                    "cache_read_input_tokens": 0},
+                "claude-haiku-4-5": {"input_tokens": 1000, "output_tokens": 100,
+                                     "cache_creation_input_tokens": 0,
+                                     "cache_read_input_tokens": 0},
+            },
+            "num_turns": 1, "duration_ms": 1000, "total_cost_usd": 0.0,
+            "result_text": "x",
+        },
+    }
+    rr = RunResult.from_raw(raw, task_id="t", config_id="baseline")
+    with pytest.raises(ValueError, match="one model per run"):
+        rr.to_jsonl(str(tmp_path / "multi.jsonl"))
+
+
+def test_to_jsonl_multi_turn_settles_on_final_turn(tmp_path):
+    # Lock in the mechanic: earlier turns contribute zero, the final turn carries all
+    # usage (incl. cache_write), and the bridged cost still equals cost_usd.
+    raw = {
+        "turns": [
+            {"model": "claude-sonnet-4-6",
+             "content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "p.py"}}]},
+            {"model": "claude-sonnet-4-6", "content": [{"type": "text", "text": "mid"}]},
+            {"model": "claude-sonnet-4-6", "content": [{"type": "text", "text": "end"}]},
+        ],
+        "result": {
+            "model_usage": {"claude-sonnet-4-6": {"input_tokens": 2000, "output_tokens": 800,
+                                                  "cache_creation_input_tokens": 1500,
+                                                  "cache_read_input_tokens": 30000}},
+            "num_turns": 3, "duration_ms": 120000, "total_cost_usd": 0.0,
+            "result_text": "end",
+        },
+    }
+    rr = RunResult.from_raw(raw, task_id="t3", config_id="baseline")
+    path = tmp_path / "multi-turn.jsonl"
+    rr.to_jsonl(str(path))
+    sess = tokencast.parse_session(str(path))
+    assert abs(sess["cost"] - rr.cost_usd) < 1e-6
+    assert sess["assistant_turns"] == 3
+    assert sess["output"] == 800
+    assert sess["cache_write"] == 1500
+    assert sess["files_touched"] == 1

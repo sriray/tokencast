@@ -71,6 +71,11 @@ class RunResult:
         the FINAL assistant turn, so tokencast.py's per-turn sums equal the accurate
         totals exactly. Earlier turns carry content (for feature extraction) but zero usage.
         """
+        if len(self.model_usage) > 1:
+            raise ValueError(
+                "to_jsonl bridge assumes one model per run; got "
+                f"{list(self.model_usage)}. Multi-model is a later sub-project."
+            )
         import datetime
 
         def iso(epoch):
