@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 import tokencast
+import budget
 
 
 @dataclass
@@ -20,6 +21,8 @@ class CandidateResult:
     cost_max: float
     quality_min: float
     quality_max: float
+    runway: Optional[int] = None
+    fits: Optional[bool] = None
 
 
 @dataclass
@@ -32,6 +35,10 @@ class OptimizeResult:
     pareto: List[str]
     cost_delta_pct: float
     quality_delta: float
+    budget_remaining: Optional[float] = None
+    need_tasks: Optional[int] = None
+    runway_gain: Optional[int] = None
+    winner_fits: Optional[bool] = None
 
     def to_json(self, path):
         with open(path, "w", encoding="utf-8") as fh:
@@ -90,7 +97,24 @@ def pareto(candidates):
     return front
 
 
-def build_result(candidates, baseline_id, min_quality=None, by="cost"):
+def apply_budget(result, budget_remaining, need_tasks=None):
+    """Populate runway / fits / runway_gain / winner_fits in place. Pure (uses budget.runway_tasks)."""
+    result.budget_remaining = budget_remaining
+    result.need_tasks = need_tasks
+    for c in result.candidates:
+        c.runway = budget.runway_tasks(budget_remaining, c.cost_usd)
+        if need_tasks is not None:
+            c.fits = (c.cost_usd * need_tasks) <= budget_remaining
+    winner = _by_id(result.candidates, result.winner_id)
+    base = _by_id(result.candidates, result.baseline_id)
+    result.runway_gain = winner.runway - base.runway
+    if need_tasks is not None:
+        result.winner_fits = winner.fits
+    return result
+
+
+def build_result(candidates, baseline_id, min_quality=None, by="cost",
+                 budget_remaining=None, need_tasks=None):
     baseline = _by_id(candidates, baseline_id)
     floor = min_quality if min_quality is not None else baseline.quality
     winner_id, _ = select(candidates, baseline_id, floor, by=by)
@@ -100,7 +124,10 @@ def build_result(candidates, baseline_id, min_quality=None, by="cost"):
     improved = winner_id != baseline_id and (primary_better or winner.quality > baseline.quality)
     cost_delta_pct = ((winner.cost_usd - baseline.cost_usd) / baseline.cost_usd * 100
                       if baseline.cost_usd else 0.0)
-    return OptimizeResult(
+    result = OptimizeResult(
         baseline_id=baseline_id, floor=floor, winner_id=winner_id, improved=improved,
         candidates=candidates, pareto=pareto(candidates),
         cost_delta_pct=cost_delta_pct, quality_delta=winner.quality - baseline.quality)
+    if budget_remaining is not None:
+        apply_budget(result, budget_remaining, need_tasks)
+    return result

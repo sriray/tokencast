@@ -86,3 +86,33 @@ def test_build_result_cheaper_is_improved():
     res = build_result(cands, "baseline")
     assert res.winner_id == "cheaper"
     assert res.improved is True
+
+
+from optimize.ranking import apply_budget
+
+
+def test_build_result_with_budget_runway_and_gain():
+    cands = [_cr("baseline", 0.8, 0.0625), _cr("baseline-haiku", 0.8, 0.03125)]
+    res = build_result(cands, "baseline", budget_remaining=100.0)
+    by = {c.config_id: c for c in res.candidates}
+    assert by["baseline"].runway == 1600          # 100 / 0.0625 (exact in float)
+    assert by["baseline-haiku"].runway == 3200    # 100 / 0.03125 (exact in float)
+    assert res.budget_remaining == 100.0
+    assert res.runway_gain == 1600                # winner(haiku) 3200 - baseline 1600
+
+
+def test_build_result_with_need_tasks_fit_verdict():
+    cands = [_cr("baseline", 0.8, 0.020), _cr("baseline-haiku", 0.8, 0.010)]
+    res = build_result(cands, "baseline", budget_remaining=100.0, need_tasks=8000)
+    by = {c.config_id: c for c in res.candidates}
+    assert by["baseline"].fits is False          # 0.02*8000 = 160 > 100
+    assert by["baseline-haiku"].fits is True      # 0.01*8000 = 80 <= 100
+    assert res.need_tasks == 8000
+    assert res.winner_fits is True               # winner is haiku
+
+
+def test_build_result_no_budget_leaves_fields_none():
+    cands = [_cr("baseline", 0.8, 0.020), _cr("c", 0.8, 0.010)]
+    res = build_result(cands, "baseline")
+    assert res.budget_remaining is None and res.runway_gain is None
+    assert all(c.runway is None and c.fits is None for c in res.candidates)
