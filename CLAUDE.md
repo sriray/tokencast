@@ -23,6 +23,11 @@ TokenCast is the one-afternoon proof of that missing half.
   uploaded), auto-refreshes pricing on load, has demo data, cost histogram with a draggable cap,
   and a forecast panel (per-task + sprint, cost + time).
 - `README.md` — user-facing docs.
+- `optimize/` — NEW heavy tier (depends on `claude-agent-sdk`, `pyyaml`). Wraps a local Claude
+  via the Agent SDK to run a task under a config and measure it accurately (`tokencast-optimize
+  run`). The light tier (`tokencast.py`) never imports this; the two connect only via JSONL.
+  Sub-project 1 of a planned closed-loop optimizer — see `docs/superpowers/specs/` and
+  `docs/superpowers/plans/`.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

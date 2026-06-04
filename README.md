@@ -109,3 +109,26 @@ should be a queryable endpoint the labs publish.
 The parser targets Claude Code today. Any agent that logs per-message token usage
 (model + input/output/cache tokens) can be supported by adding a reader that emits the same
 session summary shape. PRs welcome in spirit; this is a sketch meant to be forked.
+
+## Optimizer tier (preview)
+
+The `forecast`/`report`/`demo` commands above are the stdlib-only, offline core. A separate
+**optimizer tier** wraps a locally-running Claude via the Claude Agent SDK to *measure runs
+accurately* — the SDK returns real token counts, so this path is not subject to the JSONL
+undercount floor that the core warns about.
+
+Install the extra and run one task under one config:
+
+```bash
+pip install -e ".[optimize]"        # pulls claude-agent-sdk + pyyaml
+tokencast-optimize run examples/task.md --config configs/baseline/ --budget 2.00 --out runs/
+python tokencast.py report runs/    # the core reads the accurate logs back
+```
+
+A config dir mirrors Agent Optimizer's layout: `metadata.yaml` (model, budget, max_turns),
+`instructions.md` (system-prompt append), `tools.json` (allowed/disallowed tools, MCP servers),
+and an optional `skills/` dir. Before any real spend the CLI prints a pre-flight cost estimate
+and asks you to confirm.
+
+This is sub-project 1 of a planned closed-loop optimizer (eval harness, candidate generation,
+model/skill/MCP optimization, task decomposition). See `docs/superpowers/specs/`.

@@ -4,6 +4,12 @@ Ordered by leverage. The first item is the one that makes the tool trustworthy; 
 secondary until it's done.
 
 ## 1. Fix token accuracy (the blocker)
+
+**Status: in progress.** The optimizer tier (`optimize/`, sub-project 1) drives Claude via the
+Agent SDK, whose result carries real aggregated token counts — accurate on every run TokenCast
+executes. Runs are written back as JSONL so the core `forecast`/`report` calibrate on accurate
+data. (The passive path over pre-existing interactive sessions is still a floor.)
+
 The JSONL `input_tokens` placeholder makes absolute costs a floor. Get a real source:
 - Prefer **OpenTelemetry metrics** from Claude Code (`claude_code.token.usage` / cost) when enabled.
 - Or parse **headless/SDK result JSON** (`--output-format json`) which carries `total_cost_usd` + final usage.

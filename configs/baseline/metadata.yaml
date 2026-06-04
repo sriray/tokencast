@@ -1,0 +1,6 @@
+# Baseline agent config for `tokencast-optimize run`.
+# This mirrors Microsoft Agent Optimizer's .agent_configs/ layout; the optimizer
+# (later sub-projects) will mutate copies of this dir to find cheaper/faster configs.
+model: sonnet
+max_turns: 30
+budget_usd: 2.00
