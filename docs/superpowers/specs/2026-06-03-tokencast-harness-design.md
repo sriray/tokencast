@@ -208,11 +208,13 @@ cost_usd, duration_ms, num_turns, transcript[], final_output, files_changed[], a
 `tokencast-optimize run taskfile.md --config configs/baseline/ --budget 2.00 --out logs/`
 
 - **Pre-flight forecast:** before a run incurs real spend (metered **dollars** *or* Claude
-  **plan credits** — see §2), call the existing `forecast` logic to predict the run's cost
-  from history; if the p90 estimate exceeds a threshold (or `--budget`), print
-  `est. p90 $X — proceed? [y/N]` and require confirmation. The dollar figure is the modeled
-  list-price cost derived from forecasted tokens, shown regardless of billing mode.
-  *TokenCast forecasts its own spend before spending it.*
+  **plan credits** — see §2), the CLI estimates the run's cost from history (v1: p90 of past
+  session costs; richer kNN matching arrives with the optimize-loop sub-project) and prints it.
+  The dollar figure is the modeled list-price cost derived from tokens, shown regardless of
+  billing mode. **As implemented, the CLI confirms (`proceed? [y/N]`) before *every* run unless
+  `--yes` is passed** — a deliberate "safer than the spec" choice for a money-spending command;
+  `--budget`/p90 drive a printed warning rather than gating the prompt. *TokenCast forecasts its
+  own spend before spending it.*
 - **Output:** writes `RunResult.to_jsonl()` into `--out`, immediately consumable by
   `python tokencast.py report logs/` and `forecast logs/`.
 - `--budget` maps to the SDK `max_budget_usd` guardrail as a hard ceiling.
