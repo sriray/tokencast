@@ -139,8 +139,11 @@ status(budget_config, scope, records, today) -> BudgetStatus
 - `consumed_real` = Σ real (a **floor**), `consumed_tokencast` = Σ tokencast,
   `consumed_total` = sum, `remaining` = `amount − consumed_total`.
 - `elapsed_days` = `today − start + 1`; `burn_rate_per_day` = `consumed_total / elapsed_days`.
-- `runway_days` = `remaining / burn_rate_per_day` (or `inf` if burn 0); `projected_exhaustion` =
-  `today + runway_days`, or `None`/"won't exhaust this period" if it lands past `end`.
+- `runway_days` = `remaining / burn_rate_per_day`, or **`None` when burn is 0** (no spend yet —
+  the CLI prints "no spend yet this period"). `projected_exhaustion` = `today + runway_days`,
+  or `None`/"won't exhaust this period" if it lands on/after `end`. (Implementation note: the
+  date is only constructed when `runway_days < (end - today).days`, so a tiny early burn can't
+  overflow `date.max`.)
 - `period_start`, `period_end` carried for display.
 
 ```

@@ -31,6 +31,11 @@ TokenCast is the one-afternoon proof of that missing half.
   Sub-project 2 adds the eval harness (`evalset`/`checks`/`sandbox`/`judge`/`scorer`/`evalrun`/
   `generate` + `eval run`/`eval init`): score a config against an eval set (rule checks + LLM
   judge) into a composite quality score with accurate cost/time.
+- `budget.py` — NEW optional light-tier module (stdlib-only). `tokencast.py budget` tracks spend
+  against a calendar-period cap (global/per-project) across two labeled sources (real usage
+  floor + accurate TokenCast runs), reporting consumed/remaining/burn-rate/runway. Fully
+  optional: with no `tokencast_budget.json`, nothing else changes. Sub-project 3a; the
+  budget-aware optimize loop (3b) imports it for runway framing.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

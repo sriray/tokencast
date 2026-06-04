@@ -21,6 +21,11 @@ The JSONL `input_tokens` placeholder makes absolute costs a floor. Get a real so
 (hybrid: deterministic rule checks + LLM judge), producing a composite quality score alongside
 accurate cost/time. This is the precondition for the optimize loop (sub-project 3).
 
+**Budget core (sub-project 3a) — done.** Optional `budget.py` + `tokencast.py budget`: a
+calendar-period cap (global / per-project) with a dual-source ledger (real usage floor +
+accurate TokenCast runs) reporting consumed/remaining/burn-rate/runway. The optimize loop will
+consume this to frame wins as runway gained (sub-project 3b).
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
