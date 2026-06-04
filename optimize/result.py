@@ -24,6 +24,7 @@ class RunResult:
     num_turns: int
     transcript: List[Dict[str, Any]]
     final_output: str
+    # Files TOUCHED (incl. reads): mirrors tokencast.py's read-inclusive FILE_TOOLS set.
     files_changed: List[str] = field(default_factory=list)
     accurate: bool = True
 

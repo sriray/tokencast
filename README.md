@@ -121,7 +121,7 @@ Install the extra and run one task under one config:
 
 ```bash
 pip install -e ".[optimize]"        # pulls claude-agent-sdk + pyyaml
-tokencast-optimize run task.md --config configs/baseline/ --budget 2.00 --out runs/
+tokencast-optimize run examples/task.md --config configs/baseline/ --budget 2.00 --out runs/
 python tokencast.py report runs/    # the core reads the accurate logs back
 ```
 
