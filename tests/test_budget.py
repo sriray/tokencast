@@ -142,3 +142,47 @@ def test_current_period_invariant_holds_for_all_anchors():
                 today = anchor + datetime.timedelta(days=offset)
                 start, end = current_period(period, anchor, today)
                 assert start <= today < end, (period, aday, today, start, end)
+
+
+from budget import SpendRecord, collect_spend, _in_scope, _in_window
+
+
+def _session_jsonl(path, output_tokens, project_ts="2026-04-10T00:00:00Z"):
+    rec = {"type": "assistant", "timestamp": project_ts,
+           "message": {"role": "assistant", "model": "claude-sonnet-4-6",
+                       "content": [{"type": "text", "text": "x"}],
+                       "usage": {"input_tokens": 0, "output_tokens": output_tokens,
+                                 "cache_creation_input_tokens": 0,
+                                 "cache_read_input_tokens": 100000}}}
+    path.write_text(json.dumps(rec) + "\n")
+
+
+def test_collect_spend_tags_sources(tmp_path):
+    real = tmp_path / "real" / "projA"
+    real.mkdir(parents=True)
+    _session_jsonl(real / "s.jsonl", 1000)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    _session_jsonl(runs / "t.jsonl", 2000)
+
+    records = collect_spend(str(tmp_path / "real"), str(runs))
+    sources = sorted(r.source for r in records)
+    assert sources == ["real", "tokencast"]
+    assert all(r.cost > 0 for r in records)
+    assert all(isinstance(r.date, datetime.date) for r in records)
+
+
+def test_collect_spend_missing_dirs_are_empty():
+    assert collect_spend("/no/such/real", "/no/such/runs") == []
+
+
+def test_filters():
+    rec = SpendRecord(cost=1.0, project="projA", date=datetime.date(2026, 4, 10),
+                      source="real")
+    assert _in_scope(rec, "global") is True
+    assert _in_scope(rec, "project:projA") is True
+    assert _in_scope(rec, "project:other") is False
+    assert _in_window(rec, datetime.date(2026, 4, 1), datetime.date(2026, 5, 1)) is True
+    assert _in_window(rec, datetime.date(2026, 5, 1), datetime.date(2026, 6, 1)) is False
+    no_date = SpendRecord(cost=1.0, project="p", date=None, source="real")
+    assert _in_window(no_date, datetime.date(2026, 4, 1), datetime.date(2026, 5, 1)) is False

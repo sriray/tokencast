@@ -122,3 +122,45 @@ def current_period(period, anchor, today):
         while _add_period(anchor, period, k) > today:
             k -= 1
     return _add_period(anchor, period, k), _add_period(anchor, period, k + 1)
+
+
+@dataclass
+class SpendRecord:
+    cost: float
+    project: str
+    date: Optional[datetime.date]
+    source: str          # "real" | "tokencast"
+
+
+def _records_from(path, source):
+    if not path or not os.path.exists(path):
+        return []
+    out = []
+    for s in tokencast.load(path):
+        d = None
+        ts = s.get("ts_first")
+        if ts:
+            try:
+                d = datetime.date.fromisoformat(ts[:10])
+            except ValueError:
+                d = None
+        out.append(SpendRecord(cost=s.get("cost", 0.0), project=s.get("project", ""),
+                               date=d, source=source))
+    return out
+
+
+def collect_spend(real_logs, runs):
+    """Combined, source-tagged spend records from real Claude Code usage + TokenCast runs."""
+    return _records_from(real_logs, "real") + _records_from(runs, "tokencast")
+
+
+def _in_scope(record, scope):
+    if scope == "global":
+        return True
+    if scope.startswith("project:"):
+        return record.project == scope.split(":", 1)[1]
+    return False
+
+
+def _in_window(record, start, end):
+    return record.date is not None and start <= record.date < end
