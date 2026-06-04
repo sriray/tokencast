@@ -132,3 +132,21 @@ and asks you to confirm.
 
 This is sub-project 1 of a planned closed-loop optimizer (eval harness, candidate generation,
 model/skill/MCP optimization, task decomposition). See `docs/superpowers/specs/`.
+
+### Evaluating configs (eval harness)
+
+Score a config against an eval set (one or many tasks). Each task runs in an isolated sandbox
+(fresh temp dir, optionally seeded from a dir or a git worktree), then is scored by deterministic
+rule checks (tests pass, file exists) plus an LLM judge for qualitative dimensions:
+
+```bash
+# draft an eval set from your repo (LLM; review before running)
+tokencast-optimize eval init --root . --out evals/generated/
+
+# run an eval set under a config, scored
+tokencast-optimize eval run evals/generated/evalset.yaml --config configs/baseline/ --out runs/
+```
+
+`eval run` prints a composite quality score, pass rate, and total cost/time — the numbers the
+optimize loop (next sub-project) ranks candidate configs on. Generated eval sets are drafts:
+their rule checks are LLM-authored shell commands, so review them before running.

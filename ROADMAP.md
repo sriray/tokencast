@@ -17,6 +17,10 @@ The JSONL `input_tokens` placeholder makes absolute costs a floor. Get a real so
   factor* for the cheap JSONL path so the local-only experience stays accurate.
 - Acceptance: forecasts within ~±15% of the provider's reported cost on a held-out set.
 
+**Eval harness (sub-project 2) — done.** `optimize/` can now score a config against an eval set
+(hybrid: deterministic rule checks + LLM judge), producing a composite quality score alongside
+accurate cost/time. This is the precondition for the optimize loop (sub-project 3).
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
