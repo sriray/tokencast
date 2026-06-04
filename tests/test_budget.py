@@ -186,3 +186,68 @@ def test_filters():
     assert _in_window(rec, datetime.date(2026, 5, 1), datetime.date(2026, 6, 1)) is False
     no_date = SpendRecord(cost=1.0, project="p", date=None, source="real")
     assert _in_window(no_date, datetime.date(2026, 4, 1), datetime.date(2026, 5, 1)) is False
+
+
+from budget import BudgetStatus, status, runway_tasks, fits
+
+
+class _Cfg:
+    # minimal stand-in matching BudgetConfig's attributes used by status()
+    period = "quarterly"
+    period_start = datetime.date(2026, 4, 1)
+
+    def amount_for(self, scope):
+        return 1000.0
+
+
+def _rec(cost, source, day=10, project="projA"):
+    return SpendRecord(cost=cost, project=project,
+                       date=datetime.date(2026, 4, day), source=source)
+
+
+def test_status_splits_sources_and_computes_remaining():
+    records = [_rec(100, "real"), _rec(50, "tokencast"),
+               _rec(999, "real", project="other")]
+    today = datetime.date(2026, 4, 20)
+    st = status(_Cfg(), "global", records, today)
+    assert st.consumed_real == 100 + 999       # global includes all real
+    assert st.consumed_tokencast == 50
+    assert st.consumed_total == 1149
+    assert st.remaining == 1000.0 - 1149       # negative: over budget
+    assert st.period_start == datetime.date(2026, 4, 1)
+    assert st.period_end == datetime.date(2026, 7, 1)
+
+
+def test_status_project_scope_and_runway():
+    records = [_rec(100, "real", project="projA"), _rec(40, "tokencast", project="projA"),
+               _rec(500, "real", project="other")]
+    today = datetime.date(2026, 4, 20)   # 20 days elapsed
+    st = status(_Cfg(), "project:projA", records, today)
+    assert st.consumed_total == 140
+    assert st.remaining == 860.0
+    assert abs(st.burn_rate_per_day - 7.0) < 1e-9   # 140 / 20
+    assert st.runway_days is not None and abs(st.runway_days - (860.0 / 7.0)) < 1e-6
+
+
+def test_status_no_spend_has_no_burn():
+    st = status(_Cfg(), "global", [], datetime.date(2026, 4, 20))
+    assert st.consumed_total == 0
+    assert st.burn_rate_per_day == 0.0
+    assert st.runway_days is None
+    assert st.projected_exhaustion is None
+
+
+def test_status_over_budget_exhausted_now():
+    records = [_rec(2000, "real")]
+    st = status(_Cfg(), "global", records, datetime.date(2026, 4, 20))
+    assert st.remaining < 0
+    assert st.runway_days == 0.0
+    assert st.projected_exhaustion == datetime.date(2026, 4, 20)
+
+
+def test_runway_tasks_and_fits():
+    assert runway_tasks(1000.0, 12.5) == 80
+    assert runway_tasks(1000.0, 0) == 0
+    assert runway_tasks(-5.0, 10.0) == 0
+    assert fits(50.0, 40.0) is True
+    assert fits(50.0, 60.0) is False

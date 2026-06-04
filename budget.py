@@ -164,3 +164,59 @@ def _in_scope(record, scope):
 
 def _in_window(record, start, end):
     return record.date is not None and start <= record.date < end
+
+
+@dataclass
+class BudgetStatus:
+    scope: str
+    amount: float
+    consumed_real: float
+    consumed_tokencast: float
+    consumed_total: float
+    remaining: float
+    period_start: datetime.date
+    period_end: datetime.date
+    burn_rate_per_day: float
+    runway_days: Optional[float]              # None => no burn yet
+    projected_exhaustion: Optional[datetime.date]  # None => won't exhaust this period
+
+
+def status(config, scope, records, today):
+    amount = config.amount_for(scope)
+    start, end = current_period(config.period, config.period_start, today)
+    in_window = [r for r in records if _in_window(r, start, end) and _in_scope(r, scope)]
+    consumed_real = sum(r.cost for r in in_window if r.source == "real")
+    consumed_tokencast = sum(r.cost for r in in_window if r.source == "tokencast")
+    consumed_total = consumed_real + consumed_tokencast
+    remaining = amount - consumed_total
+    elapsed_days = max(1, (today - start).days + 1)
+    burn = consumed_total / elapsed_days
+
+    if remaining <= 0:
+        runway_days = 0.0
+        projected = today                                  # already over budget
+    elif burn <= 0:
+        runway_days = None
+        projected = None
+    else:
+        runway_days = remaining / burn
+        proj = today + datetime.timedelta(days=runway_days)
+        projected = proj if proj < end else None           # None => survives the period
+
+    return BudgetStatus(
+        scope=scope, amount=amount, consumed_real=consumed_real,
+        consumed_tokencast=consumed_tokencast, consumed_total=consumed_total,
+        remaining=remaining, period_start=start, period_end=end,
+        burn_rate_per_day=burn, runway_days=runway_days, projected_exhaustion=projected)
+
+
+def runway_tasks(remaining, per_task_cost):
+    """How many tasks of ~per_task_cost fit in the remaining budget (floored, >= 0)."""
+    if per_task_cost <= 0 or remaining <= 0:
+        return 0
+    return int(remaining // per_task_cost)
+
+
+def fits(remaining, forecast_cost):
+    """Whether a forecasted spend fits in the remaining budget."""
+    return forecast_cost <= remaining
