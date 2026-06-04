@@ -124,3 +124,21 @@ def test_current_period_today_equals_anchor():
     anchor = datetime.date(2026, 4, 1)
     assert current_period("monthly", anchor, anchor) == (
         anchor, datetime.date(2026, 5, 1))
+
+
+def test_current_period_backward_clamping_anchor_contains_today():
+    # anchor on a clamping day (31st), today just before it -> window MUST contain today
+    start, end = current_period("monthly", datetime.date(2028, 7, 31),
+                                datetime.date(2028, 7, 30))
+    assert start <= datetime.date(2028, 7, 30) < end
+
+
+def test_current_period_invariant_holds_for_all_anchors():
+    # the core contract: start <= today < end, for clamping anchor days and both directions
+    for period in ("monthly", "quarterly", "annual"):
+        for aday in (28, 29, 30, 31):
+            anchor = datetime.date(2027, 1, aday)   # January has 31 days, so aday is valid
+            for offset in range(-400, 400, 7):
+                today = anchor + datetime.timedelta(days=offset)
+                start, end = current_period(period, anchor, today)
+                assert start <= today < end, (period, aday, today, start, end)

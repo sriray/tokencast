@@ -108,15 +108,17 @@ def _add_period(d, period, n):
 
 
 def current_period(period, anchor, today):
-    """(start, end) of the period window containing `today`, stepping from `anchor`.
-    `end` is exclusive."""
-    start = anchor
+    """(start, end) of the period window containing `today`. `end` is exclusive.
+
+    Every bound is computed as `_add_period(anchor, period, k)` from the ORIGINAL anchor (not
+    cumulatively), so windows are strictly increasing, contiguous, and always satisfy
+    start <= today < end -- even for anchor days 29-31 where month-end clamping applies.
+    """
+    k = 0
     if today >= anchor:
-        while True:
-            nxt = _add_period(start, period, 1)
-            if today < nxt:
-                return start, nxt
-            start = nxt
-    while today < start:
-        start = _add_period(start, period, -1)
-    return start, _add_period(start, period, 1)
+        while _add_period(anchor, period, k + 1) <= today:
+            k += 1
+    else:
+        while _add_period(anchor, period, k) > today:
+            k -= 1
+    return _add_period(anchor, period, k), _add_period(anchor, period, k + 1)
