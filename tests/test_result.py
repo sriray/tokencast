@@ -34,3 +34,33 @@ def test_from_raw_computes_cost_and_features():
     assert rr.accurate is True
     # a.py appears twice but is deduped; order preserved
     assert rr.files_changed == ["a.py", "b.py"]
+
+
+import tokencast
+
+
+def test_to_jsonl_bridges_to_tokencast(tmp_path):
+    rr = RunResult.from_raw(RAW, task_id="t1", config_id="baseline")
+    path = tmp_path / "t1-baseline.jsonl"
+    rr.to_jsonl(str(path))
+
+    sess = tokencast.parse_session(str(path))
+    # The whole point: tokencast's summed cost equals our authoritative cost.
+    assert abs(sess["cost"] - rr.cost_usd) < 1e-6
+    # Session-level token totals match the authoritative model_usage.
+    assert sess["output"] == 500
+    assert sess["input"] == 1000
+    assert sess["cache_read"] == 10000
+    # Features survive: two assistant turns, files deduped, duration in minutes.
+    assert sess["assistant_turns"] == 2
+    assert sess["files_touched"] == 2
+    assert sess["duration_min"] == 0.7  # 42000 ms = 42 s = 0.7 min
+
+
+def test_to_jsonl_handles_zero_turns(tmp_path):
+    raw = {"turns": [], "result": dict(RAW["result"])}
+    rr = RunResult.from_raw(raw, task_id="t0", config_id="baseline")
+    path = tmp_path / "empty.jsonl"
+    rr.to_jsonl(str(path))
+    sess = tokencast.parse_session(str(path))
+    assert abs(sess["cost"] - rr.cost_usd) < 1e-6

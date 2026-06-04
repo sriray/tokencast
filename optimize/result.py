@@ -53,3 +53,48 @@ class RunResult:
             files_changed=files,
             accurate=True,
         )
+
+    def _settlement_usage(self):
+        """Sum authoritative per-model usage into one totals dict (single model per run)."""
+        totals = {"input_tokens": 0, "output_tokens": 0,
+                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        for u in self.model_usage.values():
+            for k in totals:
+                totals[k] += u.get(k, 0) or 0
+        return totals
+
+    def _settlement_model(self):
+        return next(iter(self.model_usage), "unknown")
+
+    def to_jsonl(self, path):
+        """Write Claude Code-schema JSONL. The entire authoritative usage is attached to
+        the FINAL assistant turn, so tokencast.py's per-turn sums equal the accurate
+        totals exactly. Earlier turns carry content (for feature extraction) but zero usage.
+        """
+        import datetime
+
+        def iso(epoch):
+            return datetime.datetime.utcfromtimestamp(epoch).isoformat() + "Z"
+
+        zero = {"input_tokens": 0, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        settle = self._settlement_usage()
+        model = self._settlement_model()
+        t0 = _BASE_EPOCH
+        t1 = _BASE_EPOCH + max(0, self.duration_ms) / 1000.0
+
+        lines = [{"type": "user", "timestamp": iso(t0),
+                  "message": {"role": "user", "content": "task"}}]
+        turns = self.transcript or [{"model": model, "content": []}]
+        n = len(turns)
+        for i, turn in enumerate(turns):
+            is_last = (i == n - 1)
+            lines.append({"type": "assistant", "timestamp": iso(t1 if is_last else t0),
+                          "message": {"role": "assistant",
+                                      "model": turn.get("model", model),
+                                      "content": turn.get("content", []),
+                                      "usage": dict(settle) if is_last else dict(zero)}})
+        with open(path, "w") as fh:
+            for ln in lines:
+                fh.write(json.dumps(ln) + "\n")
+        return path
