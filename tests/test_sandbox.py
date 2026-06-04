@@ -51,3 +51,47 @@ def test_seed_repo_worktree(tmp_path):
     listing = subprocess.run(["git", "worktree", "list"], cwd=repo,
                              capture_output=True, text=True).stdout
     assert seen not in listing
+
+
+import tempfile
+
+import pytest
+
+
+def test_seed_dir_copies_dotfiles(tmp_path):
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / ".gitignore").write_text("*.pyc\n")
+    nested = seed / ".config"
+    nested.mkdir()
+    (nested / "settings.json").write_text("{}\n")
+    with task_sandbox(_task(seed_dir=str(seed))) as cwd:
+        assert os.path.isfile(os.path.join(cwd, ".gitignore"))
+        assert os.path.isfile(os.path.join(cwd, ".config", "settings.json"))
+
+
+def test_seed_repo_add_failure_cleans_up(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "f.py").write_text("x\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "i"], cwd=repo, check=True, env=env)
+
+    created = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def spy(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        created.append(d)
+        return d
+
+    monkeypatch.setattr(tempfile, "mkdtemp", spy)
+
+    with pytest.raises(RuntimeError, match="worktree add failed"):
+        with task_sandbox(_task(seed_repo={"path": str(repo), "ref": "no-such-ref"})):
+            pass
+    assert created
+    assert not os.path.exists(created[0])  # temp dir must not leak on add failure

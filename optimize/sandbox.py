@@ -17,13 +17,20 @@ def task_sandbox(task):
         repo = os.path.abspath(task.seed_repo["path"])
         ref = task.seed_repo.get("ref", "HEAD")
         wt = tempfile.mkdtemp(prefix="tokencast-wt-")
-        subprocess.run(["git", "-C", repo, "worktree", "add", "--detach", wt, ref],
-                       check=True, capture_output=True)
         try:
-            yield wt
+            try:
+                subprocess.run(["git", "-C", repo, "worktree", "add", "--detach", wt, ref],
+                               check=True, capture_output=True)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(
+                    f"git worktree add failed for {repo}@{ref}: "
+                    f"{e.stderr.decode(errors='ignore').strip()}")
+            try:
+                yield wt
+            finally:
+                subprocess.run(["git", "-C", repo, "worktree", "remove", "--force", wt],
+                               capture_output=True)
         finally:
-            subprocess.run(["git", "-C", repo, "worktree", "remove", "--force", wt],
-                           capture_output=True)
             shutil.rmtree(wt, ignore_errors=True)
         return
 
