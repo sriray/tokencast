@@ -76,3 +76,17 @@ def test_run_optimize_with_budget_runway(tmp_path):
     by = {c.config_id: c for c in res.candidates}
     assert by["baseline-haiku"].runway is not None
     assert res.runway_gain is not None and res.runway_gain > 0
+
+
+def test_run_optimize_all_failed_keeps_baseline(tmp_path):
+    baseline = _baseline(tmp_path)
+    cands = model_sweep(baseline)
+
+    def failing_runner(prompt, options, cwd):
+        raise RuntimeError("boom")
+
+    out = tmp_path / "runs"
+    res = run_optimize(baseline, cands, _evalset(), runner=failing_runner,
+                       judge=lambda p: 1.0, out_dir=str(out))
+    assert res.winner_id == "baseline"   # nothing actually ran -> keep baseline
+    assert res.improved is False

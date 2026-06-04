@@ -116,3 +116,19 @@ def test_build_result_no_budget_leaves_fields_none():
     res = build_result(cands, "baseline")
     assert res.budget_remaining is None and res.runway_gain is None
     assert all(c.runway is None and c.fits is None for c in res.candidates)
+
+
+def test_select_excludes_zero_cost_failed_config():
+    # cost 0 == the eval didn't actually run; must not out-rank a real config, even at floor 0
+    cands = [_cr("baseline", 0.0, 0.0), _cr("aaa-broken", 0.0, 0.0),
+             _cr("working", 0.5, 0.02)]
+    winner_id, improved = select(cands, "baseline", floor=0.0)
+    assert winner_id == "working"
+    assert improved is True
+
+
+def test_select_all_zero_cost_falls_back_to_baseline():
+    cands = [_cr("baseline", 0.0, 0.0), _cr("aaa", 0.0, 0.0)]
+    winner_id, improved = select(cands, "baseline", floor=0.0)
+    assert winner_id == "baseline"
+    assert improved is False

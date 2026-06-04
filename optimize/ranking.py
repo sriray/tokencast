@@ -74,7 +74,9 @@ def _by_id(candidates, cid):
 
 
 def select(candidates, baseline_id, floor, by="cost"):
-    eligible = [c for c in candidates if c.quality >= floor]
+    # cost_usd == 0 means the eval did not actually run (all tasks failed); such a config
+    # is never a valid winner. If everything is zero-cost, eligible is empty -> baseline fallback.
+    eligible = [c for c in candidates if c.quality >= floor and c.cost_usd > 0]
     if not eligible:
         return baseline_id, False
     if by == "time":
