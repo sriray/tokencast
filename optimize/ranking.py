@@ -93,8 +93,11 @@ def pareto(candidates):
 def build_result(candidates, baseline_id, min_quality=None, by="cost"):
     baseline = _by_id(candidates, baseline_id)
     floor = min_quality if min_quality is not None else baseline.quality
-    winner_id, improved = select(candidates, baseline_id, floor, by=by)
+    winner_id, _ = select(candidates, baseline_id, floor, by=by)
     winner = _by_id(candidates, winner_id)
+    primary_better = (winner.duration_ms < baseline.duration_ms if by == "time"
+                      else winner.cost_usd < baseline.cost_usd)
+    improved = winner_id != baseline_id and (primary_better or winner.quality > baseline.quality)
     cost_delta_pct = ((winner.cost_usd - baseline.cost_usd) / baseline.cost_usd * 100
                       if baseline.cost_usd else 0.0)
     return OptimizeResult(

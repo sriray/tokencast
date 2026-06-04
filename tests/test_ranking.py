@@ -70,3 +70,19 @@ def test_build_result_deltas_and_json(tmp_path):
     res.to_json(str(p))
     data = json.loads(p.read_text())
     assert data["winner_id"] == "baseline-haiku"
+
+
+def test_build_result_metric_tie_is_not_improved():
+    # 'aaa' ties baseline on cost+quality, wins only the lexical id tie-break -> NOT improved
+    cands = [_cr("baseline", 0.8, 0.010), _cr("aaa", 0.8, 0.010)]
+    res = build_result(cands, "baseline")
+    assert res.winner_id == "aaa"
+    assert res.improved is False
+    assert res.cost_delta_pct == 0.0
+
+
+def test_build_result_cheaper_is_improved():
+    cands = [_cr("baseline", 0.8, 0.020), _cr("cheaper", 0.8, 0.010)]
+    res = build_result(cands, "baseline")
+    assert res.winner_id == "cheaper"
+    assert res.improved is True
