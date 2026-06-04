@@ -82,3 +82,41 @@ class BudgetConfig:
                 return b.amount
         configured = [b.scope for b in self.budgets]
         raise ValueError(f"scope {scope!r} not in budget config; configured scopes: {configured}")
+
+
+def _days_in_month(year, month):
+    if month == 12:
+        return 31
+    return (datetime.date(year, month + 1, 1) - datetime.date(year, month, 1)).days
+
+
+def _add_months(d, n):
+    total = (d.year * 12 + (d.month - 1)) + n
+    year, month = divmod(total, 12)
+    month += 1
+    return datetime.date(year, month, min(d.day, _days_in_month(year, month)))
+
+
+def _add_period(d, period, n):
+    if period == "monthly":
+        return _add_months(d, n)
+    if period == "quarterly":
+        return _add_months(d, n * 3)
+    if period == "annual":
+        return _add_months(d, n * 12)
+    raise ValueError(f"unknown period {period!r}")
+
+
+def current_period(period, anchor, today):
+    """(start, end) of the period window containing `today`, stepping from `anchor`.
+    `end` is exclusive."""
+    start = anchor
+    if today >= anchor:
+        while True:
+            nxt = _add_period(start, period, 1)
+            if today < nxt:
+                return start, nxt
+            start = nxt
+    while today < start:
+        start = _add_period(start, period, -1)
+    return start, _add_period(start, period, 1)

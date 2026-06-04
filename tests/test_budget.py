@@ -95,3 +95,32 @@ def test_load_rejects_malformed_json(tmp_path):
     p.write_text("{ not valid json ")
     with pytest.raises(ValueError, match="tokencast_budget.json"):
         BudgetConfig.load(str(p))
+
+
+from budget import current_period
+
+
+def test_current_period_quarterly():
+    anchor = datetime.date(2026, 4, 1)
+    assert current_period("quarterly", anchor, datetime.date(2026, 5, 15)) == (
+        datetime.date(2026, 4, 1), datetime.date(2026, 7, 1))
+    assert current_period("quarterly", anchor, datetime.date(2026, 8, 1)) == (
+        datetime.date(2026, 7, 1), datetime.date(2026, 10, 1))
+    # several periods after the anchor
+    assert current_period("quarterly", anchor, datetime.date(2027, 1, 15)) == (
+        datetime.date(2027, 1, 1), datetime.date(2027, 4, 1))
+
+
+def test_current_period_monthly_and_annual():
+    assert current_period("monthly", datetime.date(2026, 1, 1),
+                          datetime.date(2026, 3, 10)) == (
+        datetime.date(2026, 3, 1), datetime.date(2026, 4, 1))
+    assert current_period("annual", datetime.date(2026, 4, 1),
+                          datetime.date(2028, 2, 1)) == (
+        datetime.date(2027, 4, 1), datetime.date(2028, 4, 1))
+
+
+def test_current_period_today_equals_anchor():
+    anchor = datetime.date(2026, 4, 1)
+    assert current_period("monthly", anchor, anchor) == (
+        anchor, datetime.date(2026, 5, 1))
