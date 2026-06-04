@@ -110,6 +110,33 @@ The parser targets Claude Code today. Any agent that logs per-message token usag
 (model + input/output/cache tokens) can be supported by adding a reader that emits the same
 session summary shape. PRs welcome in spirit; this is a sketch meant to be forked.
 
+## Budgets (optional)
+
+In the metered era teams set hard spend caps (e.g. a per-engineer quarterly budget). TokenCast
+can track spend against a cap and tell you your **runway** — entirely optional, stdlib-only,
+offline. Create a `tokencast_budget.json`:
+
+```json
+{
+  "period": "quarterly",
+  "period_start": "2026-04-01",
+  "budgets": [
+    { "scope": "global", "amount": 15000 },
+    { "scope": "project:tokencast", "amount": 2000 }
+  ]
+}
+```
+
+```bash
+python tokencast.py budget                       # consumed / remaining / burn rate / runway
+python tokencast.py budget --scope project:tokencast --per-task 12.50
+python tokencast.py budget --forecast 800        # would an $800 sprint fit what's left?
+```
+
+It counts two spend streams, labeled separately: your real Claude Code usage
+(`~/.claude/projects`, a **floor** due to the input-token undercount) and accurate TokenCast
+runs (`./runs`). With no `tokencast_budget.json`, nothing changes and `budget` just prints a hint.
+
 ## Optimizer tier (preview)
 
 The `forecast`/`report`/`demo` commands above are the stdlib-only, offline core. A separate
