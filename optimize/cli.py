@@ -208,7 +208,7 @@ def cmd_optimize(args):
     if p90 is not None:
         total = p90 * n_tasks * n_cfgs * args.repeats
         print(f"Pre-flight: {n_cfgs} configs x {n_tasks} tasks x {args.repeats} repeats "
-              f"(incl. {n_generated} generated); est. total ~ {_fmt_cost(total)} "
+              f"(up to {n_generated} generated); est. total ~ {_fmt_cost(total)} "
               f"(per-task p90, modeled at list prices)", file=sys.stderr)
     else:
         print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
