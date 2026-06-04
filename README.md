@@ -177,3 +177,22 @@ tokencast-optimize eval run evals/generated/evalset.yaml --config configs/baseli
 `eval run` prints a composite quality score, pass rate, and total cost/time — the numbers the
 optimize loop (next sub-project) ranks candidate configs on. Generated eval sets are drafts:
 their rule checks are LLM-authored shell commands, so review them before running.
+
+### Optimizing (cost-first, budget-aware)
+
+Rank candidate configs against an eval set and promote the cheapest that holds quality:
+
+```bash
+# try opus/sonnet/haiku variants of the baseline, ranked cost-first under its quality floor
+tokencast-optimize optimize evals/generated/evalset.yaml --config configs/baseline/ --model-sweep
+
+# frame the win against a budget: how much more work fits the same cap?
+tokencast-optimize optimize evalset.yaml --config configs/baseline/ --model-sweep \
+    --budget-remaining 15000 --need-tasks 1000
+```
+
+It prints a ranked table (* winner, + Pareto frontier), the winner-vs-baseline cost delta, and —
+when a budget is supplied (`--budget-remaining`, or `--budget-config`/`--budget-scope` to read your
+`tokencast_budget.json` ledger) — the **runway gained** ("winner affords ~1,428 tasks vs 830, same
+budget") plus a `--need-tasks N` fit verdict. The winner config is written to `runs/promoted/`
+(and to `--promote DEST` if given); your live `CLAUDE.md` is never touched.

@@ -36,6 +36,10 @@ TokenCast is the one-afternoon proof of that missing half.
   floor + accurate TokenCast runs), reporting consumed/remaining/burn-rate/runway. Fully
   optional: with no `tokencast_budget.json`, nothing else changes. Sub-project 3a; the
   budget-aware optimize loop (3b) imports it for runway framing.
+- `optimize/` (loop) — `candidates`/`ranking`/`loop` + `tokencast-optimize optimize`: eval a
+  baseline + candidate configs, rank cost-first under a quality floor (Pareto surfaced), promote
+  a winner. Budget-aware (imports `budget.runway_tasks`): reports runway gained + `--need-tasks`
+  fit when a budget is supplied; fully optional otherwise. Sub-project 3b.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

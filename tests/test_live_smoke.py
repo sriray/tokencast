@@ -53,3 +53,33 @@ def test_live_eval_run(tmp_path):
     assert len(report.tasks) == 1
     assert 0.0 <= report.composite <= 1.0
     assert report.total_cost_usd >= 0.0
+
+
+def test_live_optimize(tmp_path):
+    import os as _os
+
+    import pytest as _pytest
+
+    if _os.environ.get("TOKENCAST_LIVE") != "1":
+        _pytest.skip("set TOKENCAST_LIVE=1 to run the real-SDK optimize smoke test (spends a little)")
+
+    from optimize.config import AgentConfig
+    from optimize.candidates import model_sweep
+    from optimize.evalset import EvalSet
+    from optimize.loop import run_optimize
+
+    cfg_dir = tmp_path / "baseline"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text("model: sonnet\nbudget_usd: 0.10\nmax_turns: 2\n")
+    baseline = AgentConfig.load(str(cfg_dir))
+
+    evalset = EvalSet.from_dict({"tasks": [
+        {"id": "smoke", "prompt": "Create pong.txt containing exactly: pong",
+         "pass_threshold": 0.5,
+         "dimensions": [{"name": "file", "weight": 1,
+                         "rule": {"kind": "file_exists", "path": "pong.txt"}}]}]})
+
+    res = run_optimize(baseline, model_sweep(baseline, models=("haiku",)), evalset,
+                       out_dir=str(tmp_path / "runs"), budget_remaining=5.0)
+    assert res.winner_id in (c.config_id for c in res.candidates)
+    assert res.budget_remaining == 5.0

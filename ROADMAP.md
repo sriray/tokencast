@@ -26,6 +26,11 @@ calendar-period cap (global / per-project) with a dual-source ledger (real usage
 accurate TokenCast runs) reporting consumed/remaining/burn-rate/runway. The optimize loop will
 consume this to frame wins as runway gained (sub-project 3b).
 
+**Optimize loop (sub-project 3b) — done.** `tokencast-optimize optimize` evals a baseline +
+candidate configs (model sweep / supplied dirs), ranks them cost-first under a quality floor
+(Pareto surfaced), and promotes a winner. Budget-aware: with a remaining budget it reports
+runway gained and a `--need-tasks` fit verdict — the optimize + budget halves, joined.
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.

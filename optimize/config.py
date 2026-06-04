@@ -110,3 +110,36 @@ class AgentConfig:
         # NOTE: skills_source is intentionally NOT mapped to SDK options yet. The exact
         # filesystem-staging mechanism is finalized in the skills-optimization sub-project.
         return opts
+
+    def save(self, path):
+        """Serialize back to a config dir (round-trips with load). Needs pyyaml."""
+        if yaml is None:
+            raise RuntimeError("pyyaml is required to save a config; install tokencast[optimize]")
+        os.makedirs(path, exist_ok=True)
+        meta = {"config_id": self.config_id, "model": self.model}
+        if self.budget_usd is not None:
+            meta["budget_usd"] = self.budget_usd
+        if self.max_turns is not None:
+            meta["max_turns"] = self.max_turns
+        with open(os.path.join(path, "metadata.yaml"), "w", encoding="utf-8") as fh:
+            yaml.safe_dump(meta, fh, sort_keys=False)
+        instr_path = os.path.join(path, "instructions.md")
+        if self.system_prompt_append:
+            with open(instr_path, "w", encoding="utf-8") as fh:
+                fh.write(self.system_prompt_append)
+        elif os.path.exists(instr_path):
+            os.remove(instr_path)
+        tools = {}
+        if self.allowed_tools:
+            tools["allowed_tools"] = list(self.allowed_tools)
+        if self.disallowed_tools:
+            tools["disallowed_tools"] = list(self.disallowed_tools)
+        if self.mcp_servers:
+            tools["mcp_servers"] = dict(self.mcp_servers)
+        tools_path = os.path.join(path, "tools.json")
+        if tools:
+            with open(tools_path, "w", encoding="utf-8") as fh:
+                json.dump(tools, fh, indent=2)
+        elif os.path.exists(tools_path):
+            os.remove(tools_path)
+        return path
