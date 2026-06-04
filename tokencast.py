@@ -391,6 +391,47 @@ def cmd_forecast(args):
               f"files={s['files_touched']:>2} tools={s['tool_calls']:>3} turns={s['assistant_turns']:>3}")
 
 
+def cmd_budget(args):
+    import budget  # lazy import avoids a tokencast<->budget cycle
+    import datetime
+    cfg = budget.BudgetConfig.load(args.config)
+    if cfg is None:
+        print(f"No budget configured. Create {args.config} to track spend against a cap "
+              "(see README).")
+        return
+    records = budget.collect_spend(args.logs, args.runs)
+    try:
+        st = budget.status(cfg, args.scope, records, datetime.date.today())
+    except ValueError as e:
+        raise SystemExit(f"tokencast: {e}")
+
+    print("=" * 68)
+    print(f"TokenCast - budget ({st.scope})")
+    print("=" * 68)
+    print(f"Period      : {st.period_start} -> {st.period_end}  ({cfg.period})")
+    print(f"Cap         : {money(st.amount)}")
+    print(f"Consumed    : {money(st.consumed_total)}   "
+          f"(real {money(st.consumed_real)} [floor] + tokencast {money(st.consumed_tokencast)})")
+    print(f"Remaining   : {money(st.remaining)}")
+    print(f"Burn rate   : {money(st.burn_rate_per_day)}/day")
+    if st.runway_days is None:
+        print("Runway      : no spend yet this period")
+    else:
+        exh = st.projected_exhaustion
+        exh_s = exh.isoformat() if exh else "after period end (won't exhaust this period)"
+        print(f"Runway      : {st.runway_days:.0f} days  (projected exhaustion: {exh_s})")
+    if args.per_task is not None:
+        print(f"Runway/task : ~{budget.runway_tasks(st.remaining, args.per_task)} tasks "
+              f"at {money(args.per_task)}/task")
+    if args.forecast is not None:
+        verdict = "FITS" if budget.fits(st.remaining, args.forecast) else "does NOT fit"
+        print(f"Forecast    : a sprint of {money(args.forecast)} {verdict} the remaining "
+              f"{money(st.remaining)}")
+    print()
+    print("Note: real-usage spend uses Claude Code's JSONL, which undercounts input tokens,")
+    print("so consumed-real is a FLOOR -- you may have less runway than shown.")
+
+
 def cmd_demo(args):
     """Generate synthetic JSONL that mimics Claude Code's schema (incl. the input-token bug)."""
     random.seed(args.seed)
@@ -460,6 +501,21 @@ def main():
     d.add_argument("--sessions", type=int, default=40)
     d.add_argument("--seed", type=int, default=7)
     d.set_defaults(func=cmd_demo)
+
+    b = sub.add_parser("budget", help="(optional) track spend against a budget cap")
+    b.add_argument("--config", default="tokencast_budget.json",
+                   help="path to the budget JSON (default ./tokencast_budget.json)")
+    b.add_argument("--scope", default="global", help="global | project:NAME")
+    b.add_argument("--logs", default=os.path.expanduser("~/.claude/projects"),
+                   help="real Claude Code logs (counts as real usage, a floor)")
+    b.add_argument("--runs", default="./runs", help="TokenCast run logs (accurate)")
+    b.add_argument("--per-task", type=float, default=None,
+                   help="also show runway in tasks at this per-task cost")
+    b.add_argument("--forecast", type=float, default=None,
+                   help="also show whether a sprint of this cost fits remaining")
+    b.add_argument("--refresh-prices", action="store_true",
+                   help="pull current prices from the live cost map")
+    b.set_defaults(func=cmd_budget)
 
     args = ap.parse_args()
     if getattr(args, "refresh_prices", False):
