@@ -131,6 +131,8 @@ class EvalTask:
             raise ValueError(
                 f"task {d['id']!r}: pass_threshold must be between 0 and 1, got {threshold}")
         dims = [Dimension.from_dict(x) for x in (d.get("dimensions") or [])]
+        if dims and sum(dim.weight for dim in dims) == 0:
+            raise ValueError(f"task {d['id']!r}: dimension weights sum to 0")
         return cls(id=d["id"], prompt=d["prompt"], pass_threshold=threshold,
                    dimensions=dims, seed_dir=d.get("seed_dir"), seed_repo=seed_repo)
 

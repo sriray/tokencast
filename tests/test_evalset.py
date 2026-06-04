@@ -174,6 +174,15 @@ def test_evaltask_rejects_out_of_range_threshold():
                             "dimensions": [{"name": "d", "judge": "ok? 0-1"}]})
 
 
+def test_evaltask_rejects_zero_total_weight():
+    # A task with dimensions whose weights all sum to 0 would make the scorer's
+    # composite collapse to 0.0 regardless of dimension scores — reject it loudly.
+    with pytest.raises(ValueError, match="dimension weights sum to 0"):
+        EvalTask.from_dict({"id": "t", "prompt": "p", "dimensions": [
+            {"name": "a", "weight": 0, "judge": "ok? 0-1"},
+            {"name": "b", "weight": 0, "judge": "ok? 0-1"}]})
+
+
 def test_evalset_rejects_duplicate_task_ids():
     with pytest.raises(ValueError, match="duplicate task id"):
         EvalSet.from_dict({"tasks": [
