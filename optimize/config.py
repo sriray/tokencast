@@ -45,20 +45,37 @@ class AgentConfig:
             if yaml is None:
                 raise RuntimeError(
                     "pyyaml is required to read metadata.yaml; install tokencast[optimize]")
-            with open(meta_path) as fh:
-                meta = yaml.safe_load(fh) or {}
+            with open(meta_path, encoding="utf-8") as fh:
+                try:
+                    meta = yaml.safe_load(fh) or {}
+                except yaml.YAMLError as e:
+                    raise ValueError(f"failed to parse {meta_path}: {e}")
+            if not isinstance(meta, dict):
+                raise ValueError(
+                    f"{meta_path} must contain a YAML mapping, got {type(meta).__name__}")
 
         instr = ""
         instr_path = os.path.join(path, "instructions.md")
         if os.path.exists(instr_path):
-            with open(instr_path) as fh:
+            with open(instr_path, encoding="utf-8") as fh:
                 instr = fh.read().strip()
 
         tools = {}
         tools_path = os.path.join(path, "tools.json")
         if os.path.exists(tools_path):
-            with open(tools_path) as fh:
-                tools = json.load(fh) or {}
+            with open(tools_path, encoding="utf-8") as fh:
+                try:
+                    tools = json.load(fh) or {}
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"failed to parse {tools_path}: {e}")
+            if not isinstance(tools, dict):
+                raise ValueError(
+                    f"{tools_path} must contain a JSON object, got {type(tools).__name__}")
+            for key in ("allowed_tools", "disallowed_tools"):
+                if key in tools and not isinstance(tools[key], list):
+                    raise ValueError(f"{tools_path}: '{key}' must be a list")
+            if "mcp_servers" in tools and not isinstance(tools["mcp_servers"], dict):
+                raise ValueError(f"{tools_path}: 'mcp_servers' must be an object")
 
         skills_dir = os.path.join(path, "skills")
         skills_source = skills_dir if os.path.isdir(skills_dir) else None

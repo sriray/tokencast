@@ -67,3 +67,38 @@ def test_to_sdk_options_minimal_is_just_model(tmp_path):
     cfg_dir.mkdir()
     opts = AgentConfig.load(str(cfg_dir)).to_sdk_options()
     assert opts == {"model": "sonnet"}
+
+
+import pytest
+
+
+def test_load_rejects_non_list_tool_fields(tmp_path):
+    cfg_dir = tmp_path / "bad"
+    cfg_dir.mkdir()
+    (cfg_dir / "tools.json").write_text(json.dumps({"allowed_tools": "Read"}))
+    with pytest.raises(ValueError, match="allowed_tools"):
+        AgentConfig.load(str(cfg_dir))
+
+
+def test_load_rejects_non_dict_mcp_servers(tmp_path):
+    cfg_dir = tmp_path / "bad"
+    cfg_dir.mkdir()
+    (cfg_dir / "tools.json").write_text(json.dumps({"mcp_servers": []}))
+    with pytest.raises(ValueError, match="mcp_servers"):
+        AgentConfig.load(str(cfg_dir))
+
+
+def test_load_wraps_malformed_json_with_path(tmp_path):
+    cfg_dir = tmp_path / "bad"
+    cfg_dir.mkdir()
+    (cfg_dir / "tools.json").write_text("{ not valid json ")
+    with pytest.raises(ValueError, match="tools.json"):
+        AgentConfig.load(str(cfg_dir))
+
+
+def test_load_rejects_non_mapping_metadata(tmp_path):
+    cfg_dir = tmp_path / "bad"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text("- just\n- a\n- list\n")
+    with pytest.raises(ValueError, match="metadata.yaml"):
+        AgentConfig.load(str(cfg_dir))

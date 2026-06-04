@@ -430,7 +430,10 @@ def cmd_demo(args):
 
 def _iso(epoch):
     import datetime
-    return datetime.datetime.utcfromtimestamp(epoch).isoformat() + "Z"
+    # timezone-aware UTC, then drop tzinfo to keep the legacy "...Z" suffix shape.
+    # (datetime.utcfromtimestamp is deprecated as of Python 3.12.)
+    return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).replace(
+        tzinfo=None).isoformat() + "Z"
 
 
 def main():

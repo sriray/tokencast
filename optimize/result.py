@@ -80,7 +80,10 @@ class RunResult:
         import datetime
 
         def iso(epoch):
-            return datetime.datetime.utcfromtimestamp(epoch).isoformat() + "Z"
+            # timezone-aware UTC, then drop tzinfo to keep the legacy "...Z" suffix shape.
+            # (datetime.utcfromtimestamp is deprecated as of Python 3.12.)
+            return datetime.datetime.fromtimestamp(
+                epoch, datetime.timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
         zero = {"input_tokens": 0, "output_tokens": 0,
                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
