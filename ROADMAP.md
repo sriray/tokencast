@@ -31,6 +31,10 @@ candidate configs (model sweep / supplied dirs), ranks them cost-first under a q
 (Pareto surfaced), and promotes a winner. Budget-aware: with a remaining budget it reports
 runway gained and a `--need-tasks` fit verdict — the optimize + budget halves, joined.
 
+**Failure-driven generator (sub-project 4a) — done.** `optimize --generate N` evals the baseline,
+feeds its failing dimensions to an LLM that proposes candidate configs (instructions + tool
+selection), then evals + ranks them with the rest. Skills & MCP axes are sub-project 4b.
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
