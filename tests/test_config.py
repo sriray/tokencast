@@ -58,8 +58,9 @@ def test_to_sdk_options_maps_fields(tmp_path):
     assert opts["mcp_servers"] == {"pw": {"command": "npx"}}
     assert opts["max_budget_usd"] == 2.0
     assert opts["max_turns"] == 30
-    # Skills staging is finalized in a later sub-project; not mapped to SDK options yet.
-    assert "setting_sources" not in opts
+    # 4b-i: a config dir with a skills/ subdir now maps skills_source -> setting_sources.
+    assert opts["setting_sources"] == ["user", "project"]
+    assert "skills" not in opts   # no `skills` name-list in this fixture's metadata
 
 
 def test_to_sdk_options_minimal_is_just_model(tmp_path):
@@ -101,4 +102,32 @@ def test_load_rejects_non_mapping_metadata(tmp_path):
     cfg_dir.mkdir()
     (cfg_dir / "metadata.yaml").write_text("- just\n- a\n- list\n")
     with pytest.raises(ValueError, match="metadata.yaml"):
+        AgentConfig.load(str(cfg_dir))
+
+
+def test_to_sdk_options_maps_skills(tmp_path):
+    cfg_dir = tmp_path / "withskills"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text(yaml.safe_dump(
+        {"model": "sonnet", "skills": ["pdf", "docx"]}))
+    opts = AgentConfig.load(str(cfg_dir)).to_sdk_options()
+    assert opts["skills"] == ["pdf", "docx"]
+    assert opts["setting_sources"] == ["user", "project"]
+
+
+def test_to_sdk_options_no_skills_no_setting_sources(tmp_path):
+    cfg_dir = tmp_path / "plain"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text("model: sonnet\n")
+    opts = AgentConfig.load(str(cfg_dir)).to_sdk_options()
+    assert "skills" not in opts
+    assert "setting_sources" not in opts
+
+
+def test_load_rejects_non_list_skills(tmp_path):
+    cfg_dir = tmp_path / "bad"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text(yaml.safe_dump(
+        {"model": "sonnet", "skills": "pdf"}))
+    with pytest.raises(ValueError, match="skills"):
         AgentConfig.load(str(cfg_dir))

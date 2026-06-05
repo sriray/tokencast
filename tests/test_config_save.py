@@ -55,3 +55,10 @@ def test_save_clears_stale_optional_files(tmp_path):
 def test_save_persists_config_id(tmp_path):
     AgentConfig(config_id="baseline-haiku", model="haiku").save(str(tmp_path / "c"))
     assert AgentConfig.load(str(tmp_path / "c")).config_id == "baseline-haiku"
+
+
+def test_save_roundtrips_skills(tmp_path):
+    cfg = AgentConfig(config_id="c", model="sonnet", skills=["pdf", "docx"])
+    cfg.save(str(tmp_path / "c"))
+    back = AgentConfig.load(str(tmp_path / "c"))
+    assert back.skills == ["pdf", "docx"]

@@ -31,6 +31,7 @@ class AgentConfig:
     disallowed_tools: List[str] = field(default_factory=list)
     mcp_servers: Dict[str, Any] = field(default_factory=dict)
     skills_source: Optional[str] = None
+    skills: Optional[List[str]] = None
     budget_usd: Optional[float] = None
     max_turns: Optional[int] = None
 
@@ -80,6 +81,11 @@ class AgentConfig:
         skills_dir = os.path.join(path, "skills")
         skills_source = skills_dir if os.path.isdir(skills_dir) else None
 
+        skills = meta.get("skills")
+        if skills is not None and not (
+                isinstance(skills, list) and all(isinstance(s, str) for s in skills)):
+            raise ValueError(f"{meta_path}: 'skills' must be a list of strings")
+
         return cls(
             config_id=meta.get("config_id", default_id),
             model=meta.get("model", "sonnet"),
@@ -88,6 +94,7 @@ class AgentConfig:
             disallowed_tools=tools.get("disallowed_tools", []),
             mcp_servers=tools.get("mcp_servers", {}),
             skills_source=skills_source,
+            skills=skills,
             budget_usd=meta.get("budget_usd"),
             max_turns=meta.get("max_turns"),
         )
@@ -107,8 +114,12 @@ class AgentConfig:
             opts["max_budget_usd"] = self.budget_usd
         if self.max_turns is not None:
             opts["max_turns"] = self.max_turns
-        # NOTE: skills_source is intentionally NOT mapped to SDK options yet. The exact
-        # filesystem-staging mechanism is finalized in the skills-optimization sub-project.
+        if self.skills is not None:
+            opts["skills"] = list(self.skills)
+        # Skills need a discovery source: "project" finds the staged sandbox skills,
+        # "user" finds the engineer's ~/.claude/skills. Only set when skills are in play.
+        if self.skills is not None or self.skills_source:
+            opts["setting_sources"] = ["user", "project"]
         return opts
 
     def save(self, path):
@@ -121,6 +132,8 @@ class AgentConfig:
             meta["budget_usd"] = self.budget_usd
         if self.max_turns is not None:
             meta["max_turns"] = self.max_turns
+        if self.skills is not None:
+            meta["skills"] = list(self.skills)
         with open(os.path.join(path, "metadata.yaml"), "w", encoding="utf-8") as fh:
             yaml.safe_dump(meta, fh, sort_keys=False)
         instr_path = os.path.join(path, "instructions.md")
