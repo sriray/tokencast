@@ -45,6 +45,11 @@ skills and MCP servers (by name, validated against the `--skills-dir`/`--mcp-cat
 added onto the baseline), prompted with each failing dimension's definition. Task decomposition is
 sub-project 5.
 
+**Task decomposition (sub-project 5) — done.** `optimize decompose` compares a monolithic task run
+against N LLM-proposed decompositions (sub-tasks run sequentially in one sandbox, each optionally
+on a cheaper model) and reports the cheapest strategy meeting a quality floor. The `/tokencast-
+optimize` skill front door is sub-project 6.
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.

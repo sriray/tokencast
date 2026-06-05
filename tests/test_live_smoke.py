@@ -138,3 +138,31 @@ def test_live_optimize_generate_skills_axis(tmp_path):
     res = run_optimize(baseline, [], evalset, out_dir=str(tmp_path / "runs"), n_generated=1,
                        skills_catalog=["nonexistent-skill"], mcp_catalog={})
     assert res.winner_id in (c.config_id for c in res.candidates)
+
+
+def test_live_decompose(tmp_path):
+    import os as _os
+
+    import pytest as _pytest
+
+    if _os.environ.get("TOKENCAST_LIVE") != "1":
+        _pytest.skip("set TOKENCAST_LIVE=1 to run the real-SDK decompose smoke (spends a little)")
+
+    from optimize.config import AgentConfig
+    from optimize.evalset import EvalSet
+    from optimize.decompose import run_decompose
+
+    cfg_dir = tmp_path / "baseline"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text("model: haiku\nbudget_usd: 0.10\nmax_turns: 2\n")
+    baseline = AgentConfig.load(str(cfg_dir))
+
+    evalset = EvalSet.from_dict({"tasks": [
+        {"id": "smoke", "prompt": "Create pong.txt containing exactly: pong",
+         "pass_threshold": 0.5,
+         "dimensions": [{"name": "file", "weight": 1, "required": True,
+                         "rule": {"kind": "file_exists", "path": "pong.txt"}}]}]})
+
+    results = run_decompose(evalset, baseline, n=1, out_dir=str(tmp_path / "runs"))
+    assert results and results[0]["winner_label"] in (
+        s["label"] for s in results[0]["strategies"])

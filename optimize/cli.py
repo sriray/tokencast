@@ -13,6 +13,7 @@ from optimize.evalrun import run_evalset
 from optimize.generate import gather_context, generate_evalset
 from optimize.candidates import from_dirs, model_sweep
 from optimize.loop import run_optimize
+from optimize.decompose import run_decompose
 from optimize import catalog
 
 
@@ -234,6 +235,57 @@ def cmd_optimize(args):
     _print_optimize_result(result, args.out)
 
 
+def _print_decompose_results(results, out_dir):
+    for r in results:
+        mono = r.get("monolithic")
+        if mono is None:
+            print(f"{r['task_id']}: (failed)")
+            continue
+        win = r["winner_label"]
+        win_cost = next((s["cost_usd"] for s in r["strategies"] if s["label"] == win),
+                        mono["cost_usd"])
+        verb = f"decomposition '{win}' wins" if win != "monolithic" else "monolithic wins"
+        print(f"{r['task_id']}: {verb} "
+              f"(cost {_fmt_cost(mono['cost_usd'])} -> {_fmt_cost(win_cost)}, "
+              f"{r['cost_delta_pct']:+.0f}% cost / {r['time_delta_pct']:+.0f}% time)")
+    print(f"\nFull results: {os.path.join(out_dir, 'decompose.json')}")
+
+
+def cmd_decompose(args):
+    if not os.path.isfile(args.evalset):
+        raise SystemExit(f"tokencast-optimize: eval set not found: {args.evalset}")
+    if not os.path.isdir(args.config):
+        raise SystemExit(f"tokencast-optimize: config dir not found: {args.config}")
+    try:
+        evalset = EvalSet.load(args.evalset)
+    except (ValueError, RuntimeError) as e:
+        raise SystemExit(f"tokencast-optimize: {e}")
+    baseline = AgentConfig.load(args.config)
+
+    n_gen = max(0, args.generate)
+    n_strategies = 1 + n_gen
+    n_tasks = len(evalset.tasks)
+    hist_n, p90 = estimate_cost(args.history)
+    if p90 is not None:
+        total = p90 * n_tasks * n_strategies
+        print(f"Pre-flight: {n_tasks} tasks x {n_strategies} strategies "
+              f"(monolithic + up to {n_gen} decompositions); est. total ~ {_fmt_cost(total)} "
+              f"(per-task p90, modeled at list prices)", file=sys.stderr)
+    else:
+        print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
+              file=sys.stderr)
+    if not args.yes:
+        resp = input(
+            "Proceed (real spend: dollars or plan credits)? [y/N] ").strip().lower()
+        if resp not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    results = run_decompose(evalset, baseline, n=n_gen, min_quality=args.min_quality,
+                            by=args.by, out_dir=args.out)
+    _print_decompose_results(results, args.out)
+
+
 def main():
     ap = argparse.ArgumentParser(prog="tokencast-optimize",
                                  description="TokenCast optimizer (Agent SDK tier)")
@@ -294,6 +346,22 @@ def main():
     o.add_argument("--mcp-catalog", default=None,
                    help="MCP catalog JSON for --generate candidates (default ~/.claude.json)")
     o.set_defaults(func=cmd_optimize)
+
+    d = sub.add_parser("decompose",
+                       help="compare a monolithic task run vs LLM-proposed decompositions")
+    d.add_argument("evalset", help="path to an evalset.yaml")
+    d.add_argument("--config", required=True, help="baseline config dir")
+    d.add_argument("--generate", type=int, default=2,
+                   help="propose N decompositions per task (default 2)")
+    d.add_argument("--min-quality", type=float, default=None,
+                   help="quality floor (default = the monolithic run's quality)")
+    d.add_argument("--by", choices=("cost", "time"), default="cost",
+                   help="optimize cost or time")
+    d.add_argument("--out", default="./runs", help="output dir (logs + decompose.json)")
+    d.add_argument("--history", default=os.path.expanduser("~/.claude/projects"),
+                   help="historical logs for the pre-flight estimate")
+    d.add_argument("--yes", action="store_true", help="skip the proceed confirmation")
+    d.set_defaults(func=cmd_decompose)
 
     args = ap.parse_args()
     args.func(args)

@@ -218,3 +218,18 @@ definition (rubric / rule) and the skills + MCP servers you have available, and 
 some to a candidate. Point it at a specific catalog with `--skills-dir DIR` (default
 `~/.claude/skills`) and `--mcp-catalog FILE` (default `~/.claude.json`); proposed names are
 validated against those catalogs and added on top of the baseline's.
+
+### Decomposing a task
+
+Sometimes the cheapest win isn't a different config — it's splitting the task into smaller
+sub-tasks (and routing the easy ones to a cheaper model). `decompose` compares the whole-task run
+against LLM-proposed decompositions and reports which is actually cheaper at an acceptable quality:
+
+```bash
+tokencast-optimize decompose evalset.yaml --config configs/baseline/ --generate 3
+```
+
+Each decomposition's sub-tasks run in sequence in one sandbox (later steps see earlier file
+changes) and are scored on the same dimensions; per-task it reports the monolithic vs the winning
+decomposition's cost/time. Use `--by time` to optimize wall-clock and `--min-quality` to set the
+floor (default: the monolithic run's quality).
