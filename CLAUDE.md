@@ -56,6 +56,11 @@ TokenCast is the one-afternoon proof of that missing half.
   task run vs N LLM-proposed decompositions (ordered sub-tasks run sequentially in one sandbox,
   per-step model routing), scored on the task's dimensions, ranked cost-first under a quality
   floor. Standalone command; injectable decomposer; optimize loop untouched. Sub-project 5.
+- `optimize/` (front door) — `auto.py` `run_auto` + `tokencast-optimize auto`: forecast →
+  optimize → promote (+ optional `--decompose` on the winner) under one confirmation, writing a
+  consolidated `auto.json`. Plus `.claude/skills/tokencast-optimize/SKILL.md`, the conversational
+  playbook that drives the CLIs (deterministic math) with LLM judgment (eval drafting, axis choice,
+  interpretation). A drift-guard test keeps the skill's command references real. Sub-project 6.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

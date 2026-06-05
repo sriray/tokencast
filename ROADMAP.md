@@ -50,6 +50,11 @@ against N LLM-proposed decompositions (sub-tasks run sequentially in one sandbox
 on a cheaper model) and reports the cheapest strategy meeting a quality floor. The `/tokencast-
 optimize` skill front door is sub-project 6.
 
+**Front door (sub-project 6) — done.** `tokencast-optimize auto` chains forecast → optimize →
+promote (+ optional `--decompose`) under one confirmation, and a `/tokencast-optimize` Claude Code
+skill drives the whole machine conversationally — code for the deterministic parts (forecast,
+scoring, ranking), the LLM for judgment (eval-set drafting, axis choice, interpretation).
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
