@@ -32,7 +32,7 @@ def _args(tmp_path, **kw):
                 out=str(tmp_path / "runs"), promote=None,
                 history=str(tmp_path / "no_history"), yes=True,
                 budget_remaining=None, budget_config=None, budget_scope="global",
-                need_tasks=None, generate=0)
+                need_tasks=None, generate=0, skills_dir=None, mcp_catalog=None)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -119,3 +119,41 @@ def test_cmd_optimize_negative_generate_clamped(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "run_optimize", fake_run_optimize)
     cli.cmd_optimize(_args(tmp_path, generate=-5, model_sweep=False))
     assert captured["n_generated"] == 0   # negative clamped to 0
+
+
+def test_cmd_optimize_resolves_and_passes_catalogs(tmp_path, monkeypatch):
+    sdir = tmp_path / "skills"
+    (sdir / "myskill").mkdir(parents=True)
+    (sdir / "myskill" / "SKILL.md").write_text("---\ndescription: x\n---\n")
+    mcp = tmp_path / "mcp.json"
+    mcp.write_text('{"pw": {"command": "npx"}}')
+
+    captured = {}
+
+    def fake_run_optimize(*a, **k):
+        captured.update(k)
+        return OptimizeResult(baseline_id="baseline", floor=0.8, winner_id="baseline",
+                              improved=False, candidates=[_cr("baseline", 0.8, 0.02)],
+                              pareto=["baseline"], cost_delta_pct=0.0, quality_delta=0.0)
+
+    monkeypatch.setattr(cli, "run_optimize", fake_run_optimize)
+    cli.cmd_optimize(_args(tmp_path, generate=1, model_sweep=False,
+                           skills_dir=str(sdir), mcp_catalog=str(mcp)))
+    assert captured["skills_catalog"] == ["myskill"]
+    assert captured["mcp_catalog"] == {"pw": {"command": "npx"}}
+    assert captured["n_generated"] == 1
+
+
+def test_cmd_optimize_no_generate_skips_catalogs(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run_optimize(*a, **k):
+        captured.update(k)
+        return OptimizeResult(baseline_id="baseline", floor=0.8, winner_id="baseline",
+                              improved=False, candidates=[_cr("baseline", 0.8, 0.02)],
+                              pareto=["baseline"], cost_delta_pct=0.0, quality_delta=0.0)
+
+    monkeypatch.setattr(cli, "run_optimize", fake_run_optimize)
+    cli.cmd_optimize(_args(tmp_path, generate=0, model_sweep=False))
+    assert captured["skills_catalog"] is None
+    assert captured["mcp_catalog"] is None

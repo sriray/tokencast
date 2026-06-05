@@ -13,6 +13,7 @@ from optimize.evalrun import run_evalset
 from optimize.generate import gather_context, generate_evalset
 from optimize.candidates import from_dirs, model_sweep
 from optimize.loop import run_optimize
+from optimize import catalog
 
 
 def _fmt_cost(x):
@@ -220,10 +221,16 @@ def cmd_optimize(args):
             print("Aborted.")
             return
 
+    skills_catalog = mcp_catalog = None
+    if n_generated > 0:
+        skills_catalog = catalog.available_skills(args.skills_dir)
+        mcp_catalog = catalog.available_mcp(args.mcp_catalog)
+
     result = run_optimize(baseline, candidates, evalset, repeats=args.repeats,
                           min_quality=args.min_quality, by=args.by, out_dir=args.out,
                           promote_to=args.promote, budget_remaining=budget_remaining,
-                          need_tasks=args.need_tasks, n_generated=n_generated)
+                          need_tasks=args.need_tasks, n_generated=n_generated,
+                          skills_catalog=skills_catalog, mcp_catalog=mcp_catalog)
     _print_optimize_result(result, args.out)
 
 
@@ -282,6 +289,10 @@ def main():
                    help="report whether the winner makes N tasks fit the budget")
     o.add_argument("--generate", type=int, default=0,
                    help="generate N failure-driven candidates (instructions/tools) via an LLM")
+    o.add_argument("--skills-dir", default=None,
+                   help="skills catalog dir for --generate candidates (default ~/.claude/skills)")
+    o.add_argument("--mcp-catalog", default=None,
+                   help="MCP catalog JSON for --generate candidates (default ~/.claude.json)")
     o.set_defaults(func=cmd_optimize)
 
     args = ap.parse_args()
