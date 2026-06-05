@@ -8,7 +8,8 @@ from optimize.evalrun import run_evalset
 
 def run_optimize(baseline, candidates, evalset, *, runner=None, judge=None, repeats=1,
                  min_quality=None, by="cost", out_dir="runs", promote_to=None,
-                 budget_remaining=None, need_tasks=None, generator=None, n_generated=0):
+                 budget_remaining=None, need_tasks=None, generator=None, n_generated=0,
+                 skills_catalog=None, mcp_catalog=None):
     def _run_config(cfg):
         reports = []
         for i in range(max(1, repeats)):
@@ -27,7 +28,8 @@ def run_optimize(baseline, candidates, evalset, *, runner=None, judge=None, repe
     working = list(candidates)
     if n_generated > 0:
         working += candidates_mod.generate_candidates(
-            baseline, baseline_reports, n=n_generated, generator=generator)
+            baseline, baseline_reports, n=n_generated, generator=generator,
+            evalset=evalset, skills_catalog=skills_catalog, mcp_catalog=mcp_catalog)
 
     # 3. evaluate the rest (deduped; baseline already evaluated)
     for cfg in working:

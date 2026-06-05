@@ -115,3 +115,20 @@ def test_run_optimize_no_generator_unchanged(tmp_path):
                        judge=lambda p: 1.0, out_dir=str(out))   # no generator
     assert res.winner_id == "baseline-haiku"
     assert all("gen" not in c.config_id for c in res.candidates)
+
+
+def test_run_optimize_passes_catalogs_to_generator(tmp_path):
+    baseline = _baseline(tmp_path)
+    seen = {}
+
+    def fake_gen(prompt):
+        seen["prompt"] = prompt
+        return [{"skills": ["pdf"]}]
+
+    out = tmp_path / "runs"
+    run_optimize(baseline, [], _evalset(), runner=_runner_cost_by_model,
+                 judge=lambda p: 1.0, out_dir=str(out), generator=fake_gen,
+                 n_generated=1, skills_catalog=["pdf"], mcp_catalog={"pw": {}})
+    assert "pdf" in seen["prompt"]               # skills catalog reached the prompt
+    assert "pw" in seen["prompt"]                # mcp catalog reached the prompt
+    assert (out / "baseline-gen1").exists()      # the generated candidate was evaluated
