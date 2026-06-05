@@ -67,7 +67,7 @@ always shell out for them.
 | Need | Command |
 | --- | --- |
 | Pre-flight forecast | `tokencast.py forecast <logs> --files F --tools T` |
-| Budget / runway | `tokencast.py budget <config.json>` |
+| Budget / runway | `tokencast.py budget --config <config.json>` |
 | Score one config | `tokencast-optimize eval run evalset.yaml --config DIR` |
 | Optimize + promote | `tokencast-optimize auto evalset.yaml --config DIR --generate N` |
 | Compare decompositions | `tokencast-optimize decompose evalset.yaml --config DIR` |
