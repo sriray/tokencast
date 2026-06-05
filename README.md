@@ -144,6 +144,25 @@ The `forecast`/`report`/`demo` commands above are the stdlib-only, offline core.
 accurately* — the SDK returns real token counts, so this path is not subject to the JSONL
 undercount floor that the core warns about.
 
+### The whole loop, end to end
+
+The recommended entry is the **`/tokencast-optimize` skill** — describe your task, project, and
+budget, and it drives everything below: it does the judgment (drafting the eval set, choosing what
+to optimize, reading the numbers) and shells out to these CLIs for the deterministic math. Under
+the hood it's a handful of composable steps, each usable on its own and each gating real spend
+behind a confirmation:
+
+| Step | Command | What it does |
+| --- | --- | --- |
+| Forecast | `python tokencast.py forecast` | pre-flight cost/time from your history |
+| Draft an eval set | `tokencast-optimize eval init` | exit criteria → scorable dimensions |
+| Score a config | `tokencast-optimize eval run` | composite quality + accurate cost/time |
+| Optimize (+ decompose) | `tokencast-optimize auto … --decompose` | rank configs across every axis, promote the winner, compare task splits |
+| Track budget | `python tokencast.py budget` | spend vs cap → runway |
+
+The axes `auto` optimizes: **model**, **instructions**, **tools**, **skills**, **MCP servers**, and
+**task decomposition** — cost-first under a quality floor, budget-aware, all optional.
+
 Install the extra and run one task under one config:
 
 ```bash
@@ -157,8 +176,10 @@ A config dir mirrors Agent Optimizer's layout: `metadata.yaml` (model, budget, m
 and an optional `skills/` dir. Before any real spend the CLI prints a pre-flight cost estimate
 and asks you to confirm.
 
-This is sub-project 1 of a planned closed-loop optimizer (eval harness, candidate generation,
-model/skill/MCP optimization, task decomposition). See `docs/superpowers/specs/`.
+`run` is the foundation; the full closed-loop optimizer is built on top of it — eval harness,
+cost-first ranking, failure-driven candidate generation, skills/MCP axes, and task decomposition,
+tied together by the `auto` command and the `/tokencast-optimize` skill (below). See
+`docs/superpowers/specs/` for the design of each piece.
 
 ### Evaluating configs (eval harness)
 
