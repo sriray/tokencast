@@ -52,6 +52,10 @@ TokenCast is the one-afternoon proof of that missing half.
   (names validated against `catalog.available_skills`/`available_mcp`, resolved additively onto
   the baseline) and enriches its prompt with each failing dimension's definition (required dims
   first). `optimize --skills-dir/--mcp-catalog` feed the catalogs. Sub-project 4b-ii.
+- `optimize/` (decompose) — `decompose.py` + `tokencast-optimize decompose`: compare a monolithic
+  task run vs N LLM-proposed decompositions (ordered sub-tasks run sequentially in one sandbox,
+  per-step model routing), scored on the task's dimensions, ranked cost-first under a quality
+  floor. Standalone command; injectable decomposer; optimize loop untouched. Sub-project 5.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30
