@@ -83,3 +83,30 @@ def test_live_optimize(tmp_path):
                        out_dir=str(tmp_path / "runs"), budget_remaining=5.0)
     assert res.winner_id in (c.config_id for c in res.candidates)
     assert res.budget_remaining == 5.0
+
+
+def test_live_optimize_generate(tmp_path):
+    import os as _os
+
+    import pytest as _pytest
+
+    if _os.environ.get("TOKENCAST_LIVE") != "1":
+        _pytest.skip("set TOKENCAST_LIVE=1 to run the real-SDK generate smoke test (spends a little)")
+
+    from optimize.config import AgentConfig
+    from optimize.evalset import EvalSet
+    from optimize.loop import run_optimize
+
+    cfg_dir = tmp_path / "baseline"
+    cfg_dir.mkdir()
+    (cfg_dir / "metadata.yaml").write_text("model: haiku\nbudget_usd: 0.10\nmax_turns: 2\n")
+    baseline = AgentConfig.load(str(cfg_dir))
+
+    evalset = EvalSet.from_dict({"tasks": [
+        {"id": "smoke", "prompt": "Create pong.txt containing exactly: pong",
+         "pass_threshold": 0.5,
+         "dimensions": [{"name": "file", "weight": 1,
+                         "rule": {"kind": "file_exists", "path": "pong.txt"}}]}]})
+
+    res = run_optimize(baseline, [], evalset, out_dir=str(tmp_path / "runs"), n_generated=1)
+    assert res.winner_id in (c.config_id for c in res.candidates)

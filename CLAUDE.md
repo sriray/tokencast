@@ -40,6 +40,10 @@ TokenCast is the one-afternoon proof of that missing half.
   baseline + candidate configs, rank cost-first under a quality floor (Pareto surfaced), promote
   a winner. Budget-aware (imports `budget.runway_tasks`): reports runway gained + `--need-tasks`
   fit when a budget is supplied; fully optional otherwise. Sub-project 3b.
+- `optimize/` (generator) — `candidates.generate_candidates` + `optimize --generate N`: a
+  failure-driven LLM generator (behind an injectable seam) that reads the baseline's failing
+  dimensions and proposes candidate configs mutating instructions + tool selection, evaluated
+  and ranked in the same loop. Sub-project 4a; skills/MCP axes are 4b.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

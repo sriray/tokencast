@@ -196,3 +196,14 @@ when a budget is supplied (`--budget-remaining`, or `--budget-config`/`--budget-
 `tokencast_budget.json` ledger) — the **runway gained** ("winner affords ~1,428 tasks vs 830, same
 budget") plus a `--need-tasks N` fit verdict. The winner config is written to `runs/promoted/`
 (and to `--promote DEST` if given); your live `CLAUDE.md` is never touched.
+
+Add `--generate N` to have an LLM read the baseline's eval failures and propose N candidate
+configs (rewritten instructions / adjusted tool lists) — they're evaluated and ranked alongside
+the rest:
+
+```bash
+tokencast-optimize optimize evalset.yaml --config configs/baseline/ --generate 3
+```
+
+The generator only ever changes instructions and tool allow/deny lists (the skills & MCP axes
+come later); its proposals run through the same sandbox + ranking as any candidate.

@@ -201,14 +201,15 @@ def cmd_optimize(args):
         except ValueError as e:
             raise SystemExit(f"tokencast-optimize: {e}")
 
-    n_cfgs = 1 + len(candidates)
+    n_generated = max(0, args.generate)
+    n_cfgs = 1 + len(candidates) + n_generated
     n_tasks = len(evalset.tasks)
     hist_n, p90 = estimate_cost(args.history)
     if p90 is not None:
         total = p90 * n_tasks * n_cfgs * args.repeats
-        print(f"Pre-flight: {n_cfgs} configs x {n_tasks} tasks x {args.repeats} repeats; "
-              f"est. total ~ {_fmt_cost(total)} (per-task p90, modeled at list prices)",
-              file=sys.stderr)
+        print(f"Pre-flight: {n_cfgs} configs x {n_tasks} tasks x {args.repeats} repeats "
+              f"(up to {n_generated} generated); est. total ~ {_fmt_cost(total)} "
+              f"(per-task p90, modeled at list prices)", file=sys.stderr)
     else:
         print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
               file=sys.stderr)
@@ -222,7 +223,7 @@ def cmd_optimize(args):
     result = run_optimize(baseline, candidates, evalset, repeats=args.repeats,
                           min_quality=args.min_quality, by=args.by, out_dir=args.out,
                           promote_to=args.promote, budget_remaining=budget_remaining,
-                          need_tasks=args.need_tasks)
+                          need_tasks=args.need_tasks, n_generated=n_generated)
     _print_optimize_result(result, args.out)
 
 
@@ -279,6 +280,8 @@ def main():
     o.add_argument("--budget-scope", default="global", help="budget scope (global | project:NAME)")
     o.add_argument("--need-tasks", type=int, default=None,
                    help="report whether the winner makes N tasks fit the budget")
+    o.add_argument("--generate", type=int, default=0,
+                   help="generate N failure-driven candidates (instructions/tools) via an LLM")
     o.set_defaults(func=cmd_optimize)
 
     args = ap.parse_args()
