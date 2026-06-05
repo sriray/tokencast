@@ -94,3 +94,28 @@ def test_run_evalset_isolates_a_failing_task(tmp_path, capsys):
     assert by_id["bad"].passed is False
     assert (out / "report.json").exists()         # report still written despite the failure
     assert "bad" in capsys.readouterr().err       # failure logged to stderr
+
+
+def test_run_evalset_stages_skills(tmp_path):
+    cfg_dir = tmp_path / "baseline"
+    (cfg_dir / "skills" / "myskill").mkdir(parents=True)
+    (cfg_dir / "skills" / "myskill" / "SKILL.md").write_text("---\ndescription: x\n---\n")
+    (cfg_dir / "metadata.yaml").write_text("model: sonnet\n")
+    config = AgentConfig.load(str(cfg_dir))
+
+    seen = {}
+
+    def fake_runner(prompt, options, cwd):
+        seen["staged"] = os.path.isfile(
+            os.path.join(cwd, ".claude", "skills", "myskill", "SKILL.md"))
+        return {"turns": [], "result": {
+            "model_usage": {"claude-sonnet-4-6": {"input_tokens": 10, "output_tokens": 5,
+                                                  "cache_creation_input_tokens": 0,
+                                                  "cache_read_input_tokens": 0}},
+            "num_turns": 1, "duration_ms": 100, "total_cost_usd": 0.0, "result_text": "x"}}
+
+    evalset = EvalSet.from_dict({"tasks": [
+        {"id": "t", "prompt": "p", "dimensions": [{"name": "d", "judge": "ok? 0-1"}]}]})
+    run_evalset(evalset, config, runner=fake_runner, judge=lambda p: 1.0,
+                out_dir=str(tmp_path / "runs"))
+    assert seen["staged"] is True   # the staged skill was present in the run's cwd
