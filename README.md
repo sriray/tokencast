@@ -207,3 +207,8 @@ tokencast-optimize optimize evalset.yaml --config configs/baseline/ --generate 3
 
 The generator only ever changes instructions and tool allow/deny lists (the skills & MCP axes
 come later); its proposals run through the same sandbox + ranking as any candidate.
+
+A config can also declare which **skills** it uses (a `skills:` name list in `metadata.yaml`,
+selecting from your `~/.claude/skills` + plugins) and bring its own skills via a `skills/`
+subdir (staged into each run's sandbox). MCP servers are set via `tools.json`'s `mcp_servers`.
+These become optimization axes the generator can tune in a later step.

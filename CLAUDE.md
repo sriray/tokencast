@@ -44,6 +44,10 @@ TokenCast is the one-afternoon proof of that missing half.
   failure-driven LLM generator (behind an injectable seam) that reads the baseline's failing
   dimensions and proposes candidate configs mutating instructions + tool selection, evaluated
   and ranked in the same loop. Sub-project 4a; skills/MCP axes are 4b.
+- `optimize/` (skills wiring) — `config.skills` (name list → SDK `skills` + `setting_sources`),
+  `staging.stage_skills` (a config's `skills/` dir → the run sandbox's `.claude/skills`), and
+  `catalog.available_skills`/`available_mcp`. Finishes the deferred skills→SDK wiring so a
+  config's skills actually apply. Sub-project 4b-i; the generator's skills/MCP axes are 4b-ii.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

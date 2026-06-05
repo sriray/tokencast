@@ -9,6 +9,7 @@ import os
 import sys
 
 from optimize import scorer as scorer_mod
+from optimize import staging
 from optimize.harness import run as run_task
 from optimize.sandbox import task_sandbox
 
@@ -19,6 +20,7 @@ def run_evalset(evalset, config, *, runner=None, judge=None, out_dir="runs"):
     for task in evalset.tasks:
         try:
             with task_sandbox(task) as cwd:
+                staging.stage_skills(config, cwd)
                 t = {"id": task.id, "prompt": task.prompt, "cwd": cwd}
                 run_result = run_task(t, config, runner=runner)
                 run_result.to_jsonl(

@@ -35,6 +35,11 @@ runway gained and a `--need-tasks` fit verdict — the optimize + budget halves,
 feeds its failing dimensions to an LLM that proposes candidate configs (instructions + tool
 selection), then evals + ranks them with the rest. Skills & MCP axes are sub-project 4b.
 
+**Skills/MCP wiring (sub-project 4b-i) — done.** A config's `skills` (name allow-list → the SDK
+`skills` option, with `setting_sources`) and `skills_source` (dir staged into the run sandbox)
+now actually apply; `available_skills`/`available_mcp` catalogs added. The generator's skills/MCP
+mutation axes that consume these are sub-project 4b-ii.
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
