@@ -162,3 +162,68 @@ def run_decomposed(task, config, decomposition, *, runner=None, judge=None, out_
             cost_usd=cost, duration_ms=duration, num_turns=num_turns, transcript=turns,
             final_output="\n\n".join(outputs), files_changed=files, accurate=True)
         return scorer_mod.score_task(task, combined, cwd, judge=judge)
+
+
+def _strategy_entry(label, score, decomposition):
+    return {"label": label, "composite": score.composite, "cost_usd": score.cost_usd,
+            "duration_ms": score.duration_ms, "passed": score.passed,
+            "steps": [{"prompt": s.prompt, "model": s.model} for s in decomposition.steps],
+            "note": decomposition.note}
+
+
+def _pct_delta(winner, base):
+    return ((winner - base) / base * 100.0) if base else 0.0
+
+
+def compare_task(task, config, *, n=2, runner=None, judge=None, decomposer=None,
+                 min_quality=None, by="cost", out_dir=None):
+    """Compare the monolithic run against N proposed decompositions; pick the cheapest (or
+    fastest, by="time") whose quality meets the floor (min_quality, default = monolithic's)."""
+    def _strategy_out(label):
+        return os.path.join(out_dir, task.id, label) if out_dir else None
+
+    mono_decomp = Decomposition([SubTask(task.prompt)], note="monolithic")
+    mono_score = run_decomposed(task, config, mono_decomp, runner=runner, judge=judge,
+                                out_dir=_strategy_out("monolithic"))
+    strategies = [("monolithic", mono_score, mono_decomp)]
+
+    plans = propose_decompositions(task, config.model, n=n, decomposer=decomposer)
+    for j, plan in enumerate(plans):
+        label = f"decomp-{j + 1}"
+        score = run_decomposed(task, config, plan, runner=runner, judge=judge,
+                               out_dir=_strategy_out(label))
+        strategies.append((label, score, plan))
+
+    floor = min_quality if min_quality is not None else mono_score.composite
+    metric = (lambda e: e[1].duration_ms) if by == "time" else (lambda e: e[1].cost_usd)
+    eligible = [e for e in strategies if e[1].composite >= floor and e[1].cost_usd > 0]
+    winner = min(eligible, key=metric) if eligible else strategies[0]
+
+    return {
+        "task_id": task.id, "by": by, "floor": floor,
+        "monolithic": _strategy_entry("monolithic", mono_score, mono_decomp),
+        "strategies": [_strategy_entry(lbl, sc, dc) for lbl, sc, dc in strategies],
+        "winner_label": winner[0],
+        "cost_delta_pct": _pct_delta(winner[1].cost_usd, mono_score.cost_usd),
+        "time_delta_pct": _pct_delta(winner[1].duration_ms, mono_score.duration_ms),
+    }
+
+
+def run_decompose(evalset, config, *, n=2, runner=None, judge=None, decomposer=None,
+                  min_quality=None, by="cost", out_dir="runs"):
+    """Run compare_task across an eval set; write decompose.json. One bad task is isolated."""
+    os.makedirs(out_dir, exist_ok=True)
+    results = []
+    for task in evalset.tasks:
+        try:
+            results.append(compare_task(
+                task, config, n=n, runner=runner, judge=judge, decomposer=decomposer,
+                min_quality=min_quality, by=by, out_dir=out_dir))
+        except Exception as e:  # isolate: one bad task must not abort the set
+            print(f"  ! task {task.id!r} decompose failed: {e}", file=sys.stderr)
+            results.append({"task_id": task.id, "by": by, "floor": 0.0, "monolithic": None,
+                            "strategies": [], "winner_label": None,
+                            "cost_delta_pct": 0.0, "time_delta_pct": 0.0})
+    with open(os.path.join(out_dir, "decompose.json"), "w", encoding="utf-8") as fh:
+        json.dump(results, fh, indent=2)
+    return results

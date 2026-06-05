@@ -133,3 +133,80 @@ def test_run_decomposed_concats_output_for_judge():
     plan = Decomposition([SubTask("aaa"), SubTask("bbb")])
     run_decomposed(task, config, plan, runner=runner, judge=judge)
     assert "OUT-aaa" in seen["p"] and "OUT-bbb" in seen["p"]   # both steps' output reach the judge
+
+
+from optimize.decompose import compare_task, run_decompose
+
+
+def _judge_task():
+    return EvalSet.from_dict({"tasks": [{"id": "jt", "prompt": "do it",
+        "dimensions": [{"name": "q", "judge": "ok 0-1"}]}]}).tasks[0]
+
+
+def _flat_runner(prompt, options, cwd):
+    # 1000 output tokens per call, regardless of model -> cost scales with the model's rate
+    return {"turns": [{"model": options["model"], "content": []}],
+            "result": {"model_usage": {options["model"]: _usage(1000)}, "num_turns": 1,
+                       "duration_ms": 100, "total_cost_usd": 0.0, "result_text": "done"}}
+
+
+def test_compare_task_picks_cheaper_decomposition():
+    config = AgentConfig(config_id="b", model="sonnet")
+
+    def fake_dec(prompt):
+        return [{"steps": [{"prompt": "a", "model": "haiku"},
+                           {"prompt": "b", "model": "haiku"}]}]
+
+    res = compare_task(_judge_task(), config, n=1, runner=_flat_runner,
+                       judge=lambda p: 1.0, decomposer=fake_dec)
+    assert res["winner_label"] == "decomp-1"     # 2x haiku ($0.010) < 1x sonnet ($0.015)
+    assert res["cost_delta_pct"] < 0
+
+
+def test_compare_task_monolithic_wins_when_decomp_below_floor():
+    config = AgentConfig(config_id="b", model="sonnet")
+
+    def runner(prompt, options, cwd):
+        text = "GOOD" if prompt == "do it" else "BAD"
+        return {"turns": [{"model": options["model"], "content": []}],
+                "result": {"model_usage": {options["model"]: _usage(1000)}, "num_turns": 1,
+                           "duration_ms": 100, "total_cost_usd": 0.0, "result_text": text}}
+
+    def fake_dec(prompt):
+        return [{"steps": [{"prompt": "a", "model": "haiku"}]}]
+
+    def judge(prompt):
+        return 1.0 if "GOOD" in prompt else 0.0
+
+    res = compare_task(_judge_task(), config, n=1, runner=runner, judge=judge,
+                       decomposer=fake_dec)
+    assert res["winner_label"] == "monolithic"   # decomp quality 0.0 < floor 1.0
+
+
+def test_compare_task_excludes_zero_cost_strategy():
+    config = AgentConfig(config_id="b", model="sonnet")
+
+    def runner(prompt, options, cwd):
+        usage = _usage(0) if prompt == "a" else _usage(1000)   # the decomp step costs $0
+        return {"turns": [{"model": options["model"], "content": []}],
+                "result": {"model_usage": {options["model"]: usage}, "num_turns": 1,
+                           "duration_ms": 100, "total_cost_usd": 0.0, "result_text": "done"}}
+
+    def fake_dec(prompt):
+        return [{"steps": [{"prompt": "a", "model": "haiku"}]}]
+
+    res = compare_task(_judge_task(), config, n=1, runner=runner, judge=lambda p: 1.0,
+                       decomposer=fake_dec)
+    assert res["winner_label"] == "monolithic"   # $0 decomp excluded despite passing quality
+
+
+def test_run_decompose_writes_json_and_isolates_failure(tmp_path):
+    config = AgentConfig(config_id="b", model="sonnet")
+    evalset = EvalSet.from_dict({"tasks": [
+        {"id": "t1", "prompt": "do it", "dimensions": [{"name": "q", "judge": "ok 0-1"}]},
+        {"id": "t2", "prompt": "do it2", "dimensions": [{"name": "q", "judge": "ok 0-1"}]}]})
+    results = run_decompose(evalset, config, n=1, runner=_flat_runner, judge=lambda p: 1.0,
+                            decomposer=lambda p: [{"steps": [{"prompt": "x"}]}],
+                            out_dir=str(tmp_path / "runs"))
+    assert [r["task_id"] for r in results] == ["t1", "t2"]
+    assert (tmp_path / "runs" / "decompose.json").exists()
