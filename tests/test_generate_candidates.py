@@ -144,3 +144,11 @@ def test_generate_candidates_skills_mcp_end_to_end():
                                 mcp_catalog={"playwright": {"command": "npx"}})
     assert cands[0].skills == ["pdf"]
     assert cands[0].mcp_servers == {"playwright": {"command": "npx"}}
+
+
+def test_apply_mutation_mcp_does_not_alias_catalog():
+    baseline = AgentConfig(config_id="b", model="sonnet")
+    cat = {"pw": {"command": "npx", "args": ["x"]}}
+    cand = _apply_mutation(baseline, {"mcp": ["pw"]}, 0, skills_catalog=[], mcp_catalog=cat)
+    cand.mcp_servers["pw"]["args"].append("MUTATED")
+    assert cat["pw"]["args"] == ["x"]   # catalog's inner config must be untouched

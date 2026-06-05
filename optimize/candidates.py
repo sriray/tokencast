@@ -1,5 +1,6 @@
 """Candidate config sources for the optimize loop. A candidate is an AgentConfig with a
 distinct config_id. Sub-project 4's generators produce AgentConfigs the same way."""
+import copy
 import dataclasses
 import json
 
@@ -127,7 +128,7 @@ def _apply_mutation(baseline, mut, i, *, skills_catalog=None, mcp_catalog=None):
             overrides["skills"] = _dedup((baseline.skills or []) + valid)
     # mcp axis: names resolved to their catalog configs, additive-merged with the baseline's
     if isinstance(mut.get("mcp"), list):
-        resolved = {name: (mcp_catalog or {})[name] for name in mut["mcp"]
+        resolved = {name: copy.deepcopy((mcp_catalog or {})[name]) for name in mut["mcp"]
                     if isinstance(name, str) and name in (mcp_catalog or {})}
         if resolved:
             overrides["mcp_servers"] = {**baseline.mcp_servers, **resolved}
