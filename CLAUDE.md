@@ -48,6 +48,10 @@ TokenCast is the one-afternoon proof of that missing half.
   `staging.stage_skills` (a config's `skills/` dir → the run sandbox's `.claude/skills`), and
   `catalog.available_skills`/`available_mcp`. Finishes the deferred skills→SDK wiring so a
   config's skills actually apply. Sub-project 4b-i; the generator's skills/MCP axes are 4b-ii.
+- `optimize/` (generator axes) — `generate_candidates` now also mutates the skills + MCP axes
+  (names validated against `catalog.available_skills`/`available_mcp`, resolved additively onto
+  the baseline) and enriches its prompt with each failing dimension's definition (required dims
+  first). `optimize --skills-dir/--mcp-catalog` feed the catalogs. Sub-project 4b-ii.
 - Both implementations mirror the same math; keep them in sync when you change cost logic.
 
 Run `python tokencast.py demo --out ./sample_logs` then `forecast ./sample_logs --files 8 --tools 30

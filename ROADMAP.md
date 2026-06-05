@@ -40,6 +40,11 @@ selection), then evals + ranks them with the rest. Skills & MCP axes are sub-pro
 now actually apply; `available_skills`/`available_mcp` catalogs added. The generator's skills/MCP
 mutation axes that consume these are sub-project 4b-ii.
 
+**Generator skills/MCP axes (sub-project 4b-ii) — done.** `optimize --generate N` now proposes
+skills and MCP servers (by name, validated against the `--skills-dir`/`--mcp-catalog` catalogs and
+added onto the baseline), prompted with each failing dimension's definition. Task decomposition is
+sub-project 5.
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
