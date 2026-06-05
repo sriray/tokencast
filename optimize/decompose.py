@@ -114,3 +114,51 @@ async def _decompose_sdk(prompt):  # pragma: no cover - requires the live SDK
         return json.loads(m.group())
     except json.JSONDecodeError:
         return []
+
+
+def _merge_usage(into, model_usage):
+    for model, u in (model_usage or {}).items():
+        dest = into.setdefault(model, {"input_tokens": 0, "output_tokens": 0,
+                                       "cache_creation_input_tokens": 0,
+                                       "cache_read_input_tokens": 0})
+        for k in dest:
+            dest[k] += u.get(k, 0) or 0
+
+
+def run_decomposed(task, config, decomposition, *, runner=None, judge=None, out_dir=None):
+    """Run a decomposition's sub-tasks sequentially in ONE sandbox cwd (each sees the prior
+    step's changes), accumulate accurate usage/cost/duration, then score the final state +
+    combined output against the task's dimensions. Returns a TaskScore."""
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with task_sandbox(task) as cwd:
+        staging.stage_skills(config, cwd)
+        combined_usage = {}
+        cost = 0.0
+        duration = 0
+        num_turns = 0
+        turns = []
+        outputs = []
+        files = []
+        for k, step in enumerate(decomposition.steps):
+            step_config = dataclasses.replace(config, model=step.model or config.model)
+            t = {"id": f"{task.id}#s{k}", "prompt": step.prompt, "cwd": cwd}
+            res = run_task(t, step_config, runner=runner)
+            if out_dir:
+                res.to_jsonl(os.path.join(
+                    out_dir, f"{task.id}-s{k}-{step_config.config_id}.jsonl"))
+            _merge_usage(combined_usage, res.model_usage)
+            cost += res.cost_usd
+            duration += res.duration_ms
+            num_turns += res.num_turns
+            turns.extend(res.transcript)
+            if res.final_output:
+                outputs.append(res.final_output)
+            for fp in res.files_changed:
+                if fp not in files:
+                    files.append(fp)
+        combined = RunResult(
+            task_id=task.id, config_id=config.config_id, model_usage=combined_usage,
+            cost_usd=cost, duration_ms=duration, num_turns=num_turns, transcript=turns,
+            final_output="\n\n".join(outputs), files_changed=files, accurate=True)
+        return scorer_mod.score_task(task, combined, cwd, judge=judge)

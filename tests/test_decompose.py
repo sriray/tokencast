@@ -63,3 +63,73 @@ def test_build_decompose_prompt_includes_task_and_dims():
     assert "[REQUIRED]" in prompt
     assert "file_exists path=cli.py" in prompt
     assert "is it clear? 0-1" in prompt
+
+
+import pathlib
+
+from optimize.decompose import run_decomposed
+
+
+def _usage(out):
+    return {"input_tokens": 0, "output_tokens": out,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+
+
+def test_run_decomposed_sums_cost_duration_and_merges_models():
+    task = _task()
+    config = AgentConfig(config_id="b", model="sonnet")
+    seq = [
+        {"model_usage": {"haiku": _usage(1000)}, "num_turns": 1, "duration_ms": 100,
+         "total_cost_usd": 0.0, "result_text": "did step1"},
+        {"model_usage": {"sonnet": _usage(1000)}, "num_turns": 2, "duration_ms": 250,
+         "total_cost_usd": 0.0, "result_text": "did step2"},
+    ]
+    calls = {"i": 0}
+
+    def runner(prompt, options, cwd):
+        r = seq[calls["i"]]
+        calls["i"] += 1
+        return {"turns": [{"model": options["model"], "content": []}], "result": r}
+
+    plan = Decomposition([SubTask("s1", "haiku"), SubTask("s2")])   # s2 -> baseline sonnet
+    score = run_decomposed(task, config, plan, runner=runner, judge=lambda p: 1.0)
+    # haiku 1000 out = $0.005 ; sonnet 1000 out = $0.015 ; sum = $0.02
+    assert round(score.cost_usd, 6) == 0.02
+    assert score.duration_ms == 350
+
+
+def test_run_decomposed_shares_cwd_for_final_state_scoring():
+    task = _task()   # file_exists cli.py (rule) + clarity (judge)
+    config = AgentConfig(config_id="b", model="sonnet")
+
+    def runner(prompt, options, cwd):
+        if "create" in prompt:
+            pathlib.Path(cwd, "cli.py").write_text("print('hi')\n")
+        return {"turns": [{"model": options["model"], "content": []}],
+                "result": {"model_usage": {options["model"]: _usage(10)}, "num_turns": 1,
+                           "duration_ms": 10, "total_cost_usd": 0.0, "result_text": "ok"}}
+
+    plan = Decomposition([SubTask("step1: create cli.py"), SubTask("step2: refine")])
+    score = run_decomposed(task, config, plan, runner=runner, judge=lambda p: 1.0)
+    assert score.dimension_scores["tests"] == 1.0   # file from step1 survives to the final cwd
+
+
+def test_run_decomposed_concats_output_for_judge():
+    task = EvalSet.from_dict({"tasks": [{"id": "jt", "prompt": "p",
+        "dimensions": [{"name": "q", "judge": "ok 0-1"}]}]}).tasks[0]
+    config = AgentConfig(config_id="b", model="sonnet")
+    seen = {}
+
+    def judge(prompt):
+        seen["p"] = prompt
+        return 1.0
+
+    def runner(prompt, options, cwd):
+        return {"turns": [{"model": options["model"], "content": []}],
+                "result": {"model_usage": {options["model"]: _usage(1)}, "num_turns": 1,
+                           "duration_ms": 1, "total_cost_usd": 0.0,
+                           "result_text": "OUT-" + prompt}}
+
+    plan = Decomposition([SubTask("aaa"), SubTask("bbb")])
+    run_decomposed(task, config, plan, runner=runner, judge=judge)
+    assert "OUT-aaa" in seen["p"] and "OUT-bbb" in seen["p"]   # both steps' output reach the judge
