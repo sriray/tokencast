@@ -243,7 +243,10 @@ promote the winner — behind a single confirmation, and optionally compares tas
 tokencast-optimize auto evalset.yaml --config configs/baseline/ --generate 3 --decompose
 ```
 
-It writes a consolidated `auto.json`. For a conversational driver that drafts the eval set,
-forecasts, and interprets the results for you, use the `/tokencast-optimize` skill — it calls these
+`--generate N` is the optimize axis (candidate configs); `--decompose` proposes its own
+decompositions on the winner, `--decompose-generate N` per task (default 2), so `--decompose`
+always tries real splits even without `--generate`. It writes a consolidated `auto.json`. For a
+conversational driver that drafts the eval set, forecasts, and interprets the results for you, use
+the `/tokencast-optimize` skill — it calls these
 CLIs for the deterministic work (forecast, scoring, ranking) and handles the judgment (what to
 optimize, how to read the numbers) itself.

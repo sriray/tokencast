@@ -53,3 +53,44 @@ def test_run_auto_with_decompose(tmp_path):
     assert res["decompose"][0]["task_id"] == "t1"
     data = json.loads((out / "auto.json").read_text())
     assert data["decompose"][0]["task_id"] == "t1"
+
+
+def _multi_decomposer(prompt):
+    # offers 3 plans; the slice in propose_decompositions caps how many are actually used
+    return [{"steps": [{"prompt": "a"}]},
+            {"steps": [{"prompt": "b"}]},
+            {"steps": [{"prompt": "c"}]}]
+
+
+def test_run_auto_decompose_defaults_to_two(tmp_path):
+    # --generate (optimize axis) defaults to 0, but --decompose must still try real
+    # decompositions: default n_decompose=2 -> monolithic + 2 proposed strategies.
+    baseline = _baseline(tmp_path)
+    out = tmp_path / "runs"
+    res = run_auto(baseline, _evalset(), runner=_runner, judge=lambda p: 1.0,
+                   with_decompose=True, n_generated=0, decomposer=_multi_decomposer,
+                   out_dir=str(out))
+    strategies = res["decompose"][0]["strategies"]
+    assert [s["label"] for s in strategies] == ["monolithic", "decomp-1", "decomp-2"]
+
+
+def test_run_auto_decompose_respects_explicit_count(tmp_path):
+    baseline = _baseline(tmp_path)
+    out = tmp_path / "runs"
+    res = run_auto(baseline, _evalset(), runner=_runner, judge=lambda p: 1.0,
+                   with_decompose=True, n_decompose=1, decomposer=_multi_decomposer,
+                   out_dir=str(out))
+    strategies = res["decompose"][0]["strategies"]
+    assert [s["label"] for s in strategies] == ["monolithic", "decomp-1"]
+
+
+def test_run_auto_decompose_explicit_zero_is_monolithic_only(tmp_path):
+    # An explicit 0 (vs None) is an allowed choice meaning monolithic-only, matching the
+    # standalone `decompose` command; the None->2 default only kicks in when unspecified.
+    baseline = _baseline(tmp_path)
+    out = tmp_path / "runs"
+    res = run_auto(baseline, _evalset(), runner=_runner, judge=lambda p: 1.0,
+                   with_decompose=True, n_decompose=0, decomposer=_multi_decomposer,
+                   out_dir=str(out))
+    strategies = res["decompose"][0]["strategies"]
+    assert [s["label"] for s in strategies] == ["monolithic"]

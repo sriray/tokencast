@@ -324,9 +324,10 @@ def cmd_auto(args):
             raise SystemExit(f"tokencast-optimize: {e}")
 
     n_generated = max(0, args.generate)
+    n_decompose = max(0, args.decompose_generate)
     n_cfgs = 1 + len(candidates) + n_generated
     n_tasks = len(evalset.tasks)
-    n_decomp = (1 + n_generated) if args.decompose else 0
+    n_decomp = (1 + n_decompose) if args.decompose else 0
     hist_n, p90 = estimate_cost(args.history)
     if p90 is not None:
         total = p90 * n_tasks * (n_cfgs * args.repeats + n_decomp)
@@ -351,6 +352,7 @@ def cmd_auto(args):
 
     summary = run_auto(baseline, evalset, candidates=candidates, repeats=args.repeats,
                        n_generated=n_generated, with_decompose=args.decompose,
+                       n_decompose=n_decompose,
                        min_quality=args.min_quality, by=args.by, out_dir=args.out,
                        promote_to=args.promote, budget_remaining=budget_remaining,
                        need_tasks=args.need_tasks, skills_catalog=skills_catalog,
@@ -467,6 +469,8 @@ def main():
                    help="MCP catalog JSON for --generate candidates (default ~/.claude.json)")
     a.add_argument("--decompose", action="store_true",
                    help="also compare task decompositions on the promoted winner")
+    a.add_argument("--decompose-generate", type=int, default=2,
+                   help="propose N decompositions per task when --decompose (default 2)")
     a.set_defaults(func=cmd_auto)
 
     args = ap.parse_args()

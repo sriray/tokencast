@@ -39,7 +39,8 @@ def _args(tmp_path, **kw):
                 out=str(tmp_path / "runs"), promote=None,
                 history=str(tmp_path / "no_history"), yes=True,
                 budget_remaining=None, budget_config=None, budget_scope="global",
-                need_tasks=None, generate=0, skills_dir=None, mcp_catalog=None, decompose=False)
+                need_tasks=None, generate=0, skills_dir=None, mcp_catalog=None,
+                decompose=False, decompose_generate=2)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -55,11 +56,35 @@ def test_cmd_auto_passes_through_and_prints(tmp_path, monkeypatch, capsys):
     cli.cmd_auto(_args(tmp_path, generate=2, decompose=True, by="time", min_quality=0.5))
     assert captured["with_decompose"] is True
     assert captured["n_generated"] == 2
+    assert captured["n_decompose"] == 2            # default, independent of --generate
     assert captured["by"] == "time"
     assert captured["min_quality"] == 0.5
     out = capsys.readouterr().out
     assert "Winner: baseline" in out
     assert "auto.json" in out
+
+
+def test_cmd_auto_decompose_count_independent_of_generate(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run_auto(baseline, evalset, **k):
+        captured.update(k)
+        return {"winner_id": "baseline", "optimize": _result(), "decompose": None}
+
+    monkeypatch.setattr(cli, "run_auto", fake_run_auto)
+    cli.cmd_auto(_args(tmp_path, generate=0, decompose=True, decompose_generate=3))
+    assert captured["n_generated"] == 0            # optimize axis untouched
+    assert captured["n_decompose"] == 3            # decomposition count is its own knob
+
+
+def test_cmd_auto_preflight_counts_decomposition_strategies(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "run_auto",
+                        lambda *a, **k: {"winner_id": "baseline", "optimize": _result(),
+                                         "decompose": None})
+    monkeypatch.setattr(cli, "estimate_cost", lambda h: (10, 0.01))
+    cli.cmd_auto(_args(tmp_path, generate=0, decompose=True, decompose_generate=2))
+    err = capsys.readouterr().err
+    assert "+ 3 decomposition strategies/task" in err    # monolithic + 2 proposed
 
 
 def test_cmd_auto_missing_evalset(tmp_path):
