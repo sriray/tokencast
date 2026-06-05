@@ -212,3 +212,9 @@ A config can also declare which **skills** it uses (a `skills:` name list in `me
 selecting from your `~/.claude/skills` + plugins) and bring its own skills via a `skills/`
 subdir (staged into each run's sandbox). MCP servers are set via `tools.json`'s `mcp_servers`.
 These become optimization axes the generator can tune in a later step.
+
+With `--generate N`, the generator now tunes those axes too: it's shown each failing dimension's
+definition (rubric / rule) and the skills + MCP servers you have available, and may propose adding
+some to a candidate. Point it at a specific catalog with `--skills-dir DIR` (default
+`~/.claude/skills`) and `--mcp-catalog FILE` (default `~/.claude.json`); proposed names are
+validated against those catalogs and added on top of the baseline's.
