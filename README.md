@@ -233,3 +233,17 @@ Each decomposition's sub-tasks run in sequence in one sandbox (later steps see e
 changes) and are scored on the same dimensions; per-task it reports the monolithic vs the winning
 decomposition's cost/time. Use `--by time` to optimize wall-clock and `--min-quality` to set the
 floor (default: the monolithic run's quality).
+
+### One-shot front door
+
+`auto` chains the common path — forecast, optimize (model + instructions + tools + skills + MCP),
+promote the winner — behind a single confirmation, and optionally compares task decompositions too:
+
+```bash
+tokencast-optimize auto evalset.yaml --config configs/baseline/ --generate 3 --decompose
+```
+
+It writes a consolidated `auto.json`. For a conversational driver that drafts the eval set,
+forecasts, and interprets the results for you, use the `/tokencast-optimize` skill — it calls these
+CLIs for the deterministic work (forecast, scoring, ranking) and handles the judgment (what to
+optimize, how to read the numbers) itself.

@@ -14,6 +14,7 @@ from optimize.generate import gather_context, generate_evalset
 from optimize.candidates import from_dirs, model_sweep
 from optimize.loop import run_optimize
 from optimize.decompose import run_decompose
+from optimize.auto import run_auto
 from optimize import catalog
 
 
@@ -286,6 +287,80 @@ def cmd_decompose(args):
     _print_decompose_results(results, args.out)
 
 
+def cmd_auto(args):
+    if not os.path.isfile(args.evalset):
+        raise SystemExit(f"tokencast-optimize: eval set not found: {args.evalset}")
+    if not os.path.isdir(args.config):
+        raise SystemExit(f"tokencast-optimize: config dir not found: {args.config}")
+    for d in (args.candidate or []):
+        if not os.path.isdir(d):
+            raise SystemExit(f"tokencast-optimize: candidate dir not found: {d}")
+    if args.need_tasks is not None and args.budget_remaining is None and not args.budget_config:
+        raise SystemExit("tokencast-optimize: --need-tasks requires a budget "
+                         "(--budget-remaining or --budget-config/--budget-scope)")
+
+    try:
+        evalset = EvalSet.load(args.evalset)
+    except (ValueError, RuntimeError) as e:
+        raise SystemExit(f"tokencast-optimize: {e}")
+    baseline = AgentConfig.load(args.config)
+    candidates = list(from_dirs(args.candidate or []))
+    if args.model_sweep:
+        candidates += model_sweep(baseline)
+
+    budget_remaining = args.budget_remaining
+    if budget_remaining is None and args.budget_config:
+        import budget as budget_mod
+        import datetime
+        cfg = budget_mod.BudgetConfig.load(args.budget_config)
+        if cfg is None:
+            raise SystemExit(f"tokencast-optimize: budget config not found: {args.budget_config}")
+        try:
+            records = budget_mod.collect_spend(
+                os.path.expanduser("~/.claude/projects"), "./runs")
+            budget_remaining = budget_mod.status(
+                cfg, args.budget_scope, records, datetime.date.today()).remaining
+        except ValueError as e:
+            raise SystemExit(f"tokencast-optimize: {e}")
+
+    n_generated = max(0, args.generate)
+    n_cfgs = 1 + len(candidates) + n_generated
+    n_tasks = len(evalset.tasks)
+    n_decomp = (1 + n_generated) if args.decompose else 0
+    hist_n, p90 = estimate_cost(args.history)
+    if p90 is not None:
+        total = p90 * n_tasks * (n_cfgs * args.repeats + n_decomp)
+        extra = f" + {n_decomp} decomposition strategies/task" if args.decompose else ""
+        print(f"Pre-flight: {n_cfgs} configs x {n_tasks} tasks x {args.repeats} repeats "
+              f"(up to {n_generated} generated){extra}; est. total ~ {_fmt_cost(total)} "
+              f"(per-task p90, modeled at list prices)", file=sys.stderr)
+    else:
+        print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
+              file=sys.stderr)
+    if not args.yes:
+        resp = input(
+            "Proceed (real spend: dollars or plan credits)? [y/N] ").strip().lower()
+        if resp not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    skills_catalog = mcp_catalog = None
+    if n_generated > 0:
+        skills_catalog = catalog.available_skills(args.skills_dir)
+        mcp_catalog = catalog.available_mcp(args.mcp_catalog)
+
+    summary = run_auto(baseline, evalset, candidates=candidates, repeats=args.repeats,
+                       n_generated=n_generated, with_decompose=args.decompose,
+                       min_quality=args.min_quality, by=args.by, out_dir=args.out,
+                       promote_to=args.promote, budget_remaining=budget_remaining,
+                       need_tasks=args.need_tasks, skills_catalog=skills_catalog,
+                       mcp_catalog=mcp_catalog)
+    _print_optimize_result(summary["optimize"], args.out)
+    if summary["decompose"] is not None:
+        _print_decompose_results(summary["decompose"], args.out)
+    print(f"Summary:  {os.path.join(args.out, 'auto.json')}")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="tokencast-optimize",
                                  description="TokenCast optimizer (Agent SDK tier)")
@@ -362,6 +437,37 @@ def main():
                    help="historical logs for the pre-flight estimate")
     d.add_argument("--yes", action="store_true", help="skip the proceed confirmation")
     d.set_defaults(func=cmd_decompose)
+
+    a = sub.add_parser("auto",
+                       help="forecast -> optimize -> promote in one shot (+ optional decompose)")
+    a.add_argument("evalset", help="path to an evalset.yaml")
+    a.add_argument("--config", required=True, help="baseline config dir")
+    a.add_argument("--candidate", action="append", help="extra candidate config dir (repeatable)")
+    a.add_argument("--model-sweep", action="store_true", help="add opus/sonnet/haiku variants")
+    a.add_argument("--repeats", type=int, default=1, help="eval each config N times (median/p90)")
+    a.add_argument("--min-quality", type=float, default=None, help="quality floor (default baseline)")
+    a.add_argument("--by", choices=("cost", "time"), default="cost", help="optimize cost or time")
+    a.add_argument("--out", default="./runs", help="output dir (logs + optimize/auto json + promoted/)")
+    a.add_argument("--promote", default=None, help="also save the winner config to this dir")
+    a.add_argument("--history", default=os.path.expanduser("~/.claude/projects"),
+                   help="historical logs for the pre-flight estimate")
+    a.add_argument("--yes", action="store_true", help="skip the proceed confirmation")
+    a.add_argument("--budget-remaining", type=float, default=None,
+                   help="remaining budget USD -> show runway gained")
+    a.add_argument("--budget-config", default=None,
+                   help="resolve remaining from a budget JSON instead of --budget-remaining")
+    a.add_argument("--budget-scope", default="global", help="budget scope (global | project:NAME)")
+    a.add_argument("--need-tasks", type=int, default=None,
+                   help="report whether the winner makes N tasks fit the budget")
+    a.add_argument("--generate", type=int, default=0,
+                   help="generate N failure-driven candidates (instructions/tools/skills/mcp)")
+    a.add_argument("--skills-dir", default=None,
+                   help="skills catalog dir for --generate candidates (default ~/.claude/skills)")
+    a.add_argument("--mcp-catalog", default=None,
+                   help="MCP catalog JSON for --generate candidates (default ~/.claude.json)")
+    a.add_argument("--decompose", action="store_true",
+                   help="also compare task decompositions on the promoted winner")
+    a.set_defaults(func=cmd_auto)
 
     args = ap.parse_args()
     args.func(args)
