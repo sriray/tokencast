@@ -55,6 +55,7 @@ def test_to_jsonl_bridges_to_tokencast(tmp_path):
     assert sess["assistant_turns"] == 2
     assert sess["files_touched"] == 2
     assert sess["duration_min"] == 0.7  # 42000 ms = 42 s = 0.7 min
+    assert sess["accurate"] is True
 
 
 def test_to_jsonl_handles_zero_turns(tmp_path):

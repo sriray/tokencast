@@ -152,7 +152,7 @@ def parse_session(path):
         "project": os.path.basename(os.path.dirname(path)),
         "cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
         "assistant_turns": 0, "tool_calls": 0, "files": set(),
-        "models": set(), "undercount_hits": 0, "ts_first": None, "ts_last": None,
+        "models": set(), "undercount_hits": 0, "accurate": False, "ts_first": None, "ts_last": None,
     }
     with open(path, "r", errors="ignore") as fh:
         for line in fh:
@@ -163,6 +163,8 @@ def parse_session(path):
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if e.get("tokencast_accurate") is True:
+                s["accurate"] = True
             ts = e.get("timestamp")
             if ts:
                 s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
