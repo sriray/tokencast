@@ -77,6 +77,33 @@ python tokencast.py forecast --files 12 --tools 40
 Time estimates use wall-clock session duration (first-to-last event), so they include human
 think/idle time — treat them as a rough timeline proxy, not billed compute.
 
+## Segmenting sessions into tasks (optional)
+
+A single Claude Code session often holds **several distinct tasks** — you start something, walk
+away, then come back hours later on something new. By default TokenCast treats one log file as one
+task (one session = one task), which can lump those together. Pass `--segment` to split each session
+into task-sized units wherever there's a long idle gap, so "a task" matches the unit a planner
+actually estimates (a ticket / a feature):
+
+```bash
+# Split sessions wherever there's a >30-min idle gap (the default threshold)
+python tokencast.py forecast ./sample_logs --files 8 --tools 30 --segment
+
+# Tune the gap, or also cut at fresh user turns between tasks
+python tokencast.py forecast ./sample_logs --segment --gap-min 20 --split-on-user
+python tokencast.py report   ./sample_logs --segment
+```
+
+- `--segment` is **opt-in and backward-compatible**: with no flag, behavior is exactly as before.
+- `--gap-min N` sets the idle-gap threshold in minutes (default `30`; `0` disables the gap rule).
+- `--split-on-user` additionally cuts at a fresh user turn once the current segment already has work
+  in it (off by default — pure user-turn splitting over-segments).
+- Costs and feature counts of the segments **sum** to the whole-session totals; segmentation changes
+  the *unit of estimation*, not the underlying token accuracy (the floor caveat below still applies).
+
+The browser version mirrors this: tick **Segment long sessions into tasks** in the forecast panel
+and set the idle-gap minutes.
+
 ## The honest part (and the whole argument)
 
 Claude Code's JSONL logs are **known to undercount input tokens** — `input_tokens` is a

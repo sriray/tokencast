@@ -62,8 +62,15 @@ in both `tokencast.py` and `tokencast.html`. The remaining accuracy path is the 
 Cost API for pure Claude-Code-log forecasts.
 
 ## 2. Better task segmentation
-A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
-git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
+
+**Status: done (idle-gap heuristic).** A session isn't always one task. `forecast`/`report` now take
+an opt-in `--segment` flag that splits each transcript into task-sized units wherever the wall-clock
+gap between consecutive entries exceeds `--gap-min` (default 30 min), with an optional
+`--split-on-user` to also cut at fresh user turns between tasks — so "a task" maps to a unit a planner
+actually estimates. Default behavior (one file = one session) is unchanged; the split is pure,
+stdlib-only, and mirrored in `tokencast.html`. Segment costs/features sum to the session totals; the
+unit changes, not the token accuracy (see #1). Git-commit-snapshot segmentation is deferred (commits
+aren't reliably present in the transcript). See `docs/superpowers/specs/2026-06-06-task-segmentation-design.md`.
 
 ## 3. Stronger forecast model
 - Add task-type features (test-heavy vs. greenfield vs. refactor; novelty vs. boilerplate).

@@ -18,7 +18,10 @@ TokenCast is the one-afternoon proof of that missing half.
 ## Current state
 
 - `tokencast.py` — Python 3.8+, stdlib only, ~300 lines. Subcommands: `forecast` (primary),
-  `report`, `demo`. Live-pricing refresh via `--refresh-prices`.
+  `report`, `demo`. Live-pricing refresh via `--refresh-prices`. Optional `--segment`
+  (`--gap-min N`, default 30; `--split-on-user`) on `forecast`/`report` splits a session
+  transcript into task-sized units at long idle gaps (ROADMAP #2) — opt-in, backward-compatible,
+  pure (`segment_entries`/`parse_session_segments`/`load_segmented`, atop a shared `reduce_entries`).
 - `tokencast.html` — single-file, no-build browser version. Parses logs client-side (nothing
   uploaded), auto-refreshes pricing on load, has demo data, cost histogram with a draggable cap,
   and a forecast panel (per-task + sprint, cost + time).

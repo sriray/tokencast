@@ -120,6 +120,14 @@
         <input type="number" id="f_tools" value="30">
         <label style="margin-top:10px;">Tasks like this in the sprint</label>
         <input type="number" id="f_count" value="1" min="1">
+        <label style="margin-top:10px; display:flex; align-items:center; gap:8px; font-weight:normal;">
+          <input type="checkbox" id="f_segment" style="width:auto; margin:0;">
+          Segment long sessions into tasks
+          <input type="number" id="f_gap" value="30" min="0" title="idle-gap threshold (minutes); 0 disables"
+                 style="width:64px; margin:0;">
+          <span class="muted" style="font-size:12px;">min idle gap</span>
+        </label>
+        <p class="muted" style="font-size:12px; margin-top:4px;">A long session often holds several tasks. Split on idle gaps so "a task" matches a planner's unit, not a whole session.</p>
         <div class="forecast-out" id="forecastOut"></div>
       </div>
       <div>
@@ -170,13 +178,14 @@ function entryCost(u,model,P){
 }
 
 // ---------- parsing ----------
-function parseSession(name, text, project, P){
+// Mirror of tokencast.py: reduce a list of parsed entries to one summary; segment a
+// transcript into task-sized units by idle gaps (and optionally fresh user turns).
+function reduceEntries(entries, name, project, P){
   const s={session:name, project:project||"(root)", cost:0, output:0, cache_read:0,
            assistant_turns:0, tool_calls:0, files:new Set(), models:new Set(),
            undercount:0, accurate:false, day:null, tsFirst:null, tsLast:null};
-  for(const line of text.split("\n")){
-    const t=line.trim(); if(!t) continue;
-    let e; try{ e=JSON.parse(t);}catch(_){ continue; }
+  for(const e of entries){
+    if(!e || typeof e!=="object") continue;
     if(e.tokencast_accurate===true) s.accurate=true;
     if(e.timestamp){
       const ms=Date.parse(e.timestamp);
@@ -202,6 +211,57 @@ function parseSession(name, text, project, P){
   s.files_touched=s.files.size;
   s.duration_min=(s.tsFirst!==null && s.tsLast!==null && s.tsLast>=s.tsFirst)?(s.tsLast-s.tsFirst)/60000:null;
   return s;
+}
+
+function parseEntries(text){
+  const out=[];
+  for(const line of text.split("\n")){
+    const t=line.trim(); if(!t) continue;
+    let e; try{ e=JSON.parse(t);}catch(_){ continue; }
+    out.push(e);
+  }
+  return out;
+}
+
+function entryHasUsage(e){
+  if(!e || typeof e!=="object") return false;
+  const msg=e.message||{};
+  return (e.type==="assistant" || msg.role==="assistant") && !!msg.usage;
+}
+
+// Split entries (file order) into one-or-more task segments. gapMin<=0 disables the gap rule.
+function segmentEntries(entries, gapMin, splitOnUser){
+  if(!entries.length) return [];
+  const gapMs=(gapMin && gapMin>0)? gapMin*60000 : null;
+  const segments=[]; let cur=[]; let lastTs=null; let curHasTurn=false;
+  for(const e of entries){
+    let ts=null;
+    if(e && typeof e==="object" && e.timestamp){ const ms=Date.parse(e.timestamp); if(!isNaN(ms)) ts=ms; }
+    let split=false;
+    if(gapMs!==null && ts!==null && lastTs!==null && (ts-lastTs)>gapMs) split=true;
+    if(!split && splitOnUser && curHasTurn && e && typeof e==="object"){
+      const msg=e.message||{};
+      if(e.type==="user" || msg.role==="user") split=true;
+    }
+    if(split && cur.length){ segments.push(cur); cur=[]; curHasTurn=false; }
+    cur.push(e);
+    if(entryHasUsage(e)) curHasTurn=true;
+    if(ts!==null) lastTs=ts;
+  }
+  if(cur.length) segments.push(cur);
+  return segments;
+}
+
+// One transcript -> list of task summaries. Drops usage-less segments; suffixes #1/#2 when split.
+function parseSessionSegments(name, entries, project, P, gapMin, splitOnUser){
+  const segs=segmentEntries(entries, gapMin, splitOnUser);
+  let kept=segs.map(seg=>reduceEntries(seg, name, project, P)).filter(s=>s.assistant_turns>0);
+  if(kept.length>1) kept.forEach((s,i)=>{ s.session=name+"#"+(i+1); });
+  return kept;
+}
+
+function parseSession(name, text, project, P){
+  return reduceEntries(parseEntries(text), name, project, P);
 }
 
 // ---------- stats ----------
@@ -266,21 +326,43 @@ function knnForecast(sessions,target){
 }
 
 // ---------- state ----------
-let SESSIONS=[];
+let SESSIONS=[];          // the working set (segmented or not) used by every view
+let RAW_ENTRIES=null;     // [{name,project,entries}] kept so we can re-segment without re-reading
+let DEMO_RAW=null;        // demo sessions keep raw token sums + entries for re-cost/re-segment
+
+function segmentOn(){ const el=document.getElementById('f_segment'); return !!(el && el.checked); }
+function gapMin(){ const v=parseInt((document.getElementById('f_gap')||{}).value); return isNaN(v)?30:v; }
+
+// Rebuild SESSIONS from the raw source according to the current segment controls.
+function deriveSessions(){
+  const P=pricing();
+  if(RAW_ENTRIES){
+    const out=[];
+    for(const r of RAW_ENTRIES){
+      if(segmentOn()){
+        for(const s of parseSessionSegments(r.name, r.entries, r.project, P, gapMin(), false)) out.push(s);
+      }else{
+        const s=reduceEntries(r.entries, r.name, r.project, P);
+        if(s.assistant_turns>0) out.push(s);
+      }
+    }
+    SESSIONS=out;
+  }else if(DEMO_RAW){
+    SESSIONS = segmentOn()
+      ? DEMO_RAW.flatMap(r=>parseSessionSegments(r.session, r.entries, r.project, P, gapMin(), false))
+      : DEMO_RAW.map(r=>reduceEntries(r.entries, r.session, r.project, P));
+  }
+}
 
 function recompute(){
-  const P=pricing();
-  // re-price from raw if we kept it; simplest: re-parse not stored, so we recompute cost lazily.
-  // We stored sessions already costed; for pricing edits we re-cost via stored token aggregates.
-  // To support live pricing edits we keep token aggregates per session:
-  for(const s of SESSIONS){
-    if(s._raw){ // recost from raw token sums
-      const p=priceFor([...s.models][0]||"sonnet",P);
-      s.cost=(s._raw.inp*p.input + s._raw.cw*p.input*P.cw + s._raw.cr*p.input*P.cr + s._raw.out*p.output)/1e6;
-    }
-  }
+  // Live pricing edits: re-derive the working set from raw entries, which re-costs
+  // every session under the current pricing (deriveSessions calls reduceEntries).
+  deriveSessions();
   render();
 }
+
+// Called when the segment controls change: re-derive the working set, then render.
+function resegment(){ deriveSessions(); render(); }
 
 function loadSessions(list){ SESSIONS=list; document.getElementById('results').classList.remove('hidden'); render(); }
 
@@ -290,7 +372,7 @@ function render(){
   const total=costs.reduce((a,b)=>a+b,0);
   // cards
   document.getElementById('cards').innerHTML=[
-    ['Sessions', SESSIONS.length],
+    [segmentOn()?'Tasks':'Sessions', SESSIONS.length],
     ['Total spend', money(total)],
     ['Median / task', money(pct(costs,.5))],
     ['p90 / task', money(pct(costs,.9))],
@@ -398,7 +480,9 @@ function forecast(){
       (td? `Effort — p50 <b>${mins(pct(td,.5))}</b> · p90 <b>${mins(pct(td,.9))}</b>
         <span class="muted" style="font-size:12px;">(sequential; parallelize to compress)</span><br>`:"");
   }
-  html += `<span class="muted">Put the p90 in your estimate. Matched on your ${k} most similar past tasks · neighbor fit: ${label}.</span>`;
+  html += `<span class="muted">Put the p90 in your estimate. Matched on your ${k} most similar past tasks (of ${basis.length}) · neighbor fit: ${label}.</span>`;
+  if(segmentOn())
+    html += `<br><span class="muted" style="font-size:12px;">Sessions segmented into tasks at idle gaps &gt;${gapMin()} min.</span>`;
   html += accurateBasis
     ? `<br><span class="muted" style="font-size:12px;">Calibrated on ${basis.length} accurate runs (real token counts).</span>`
     : `<br><span class="muted" style="font-size:12px;">Floor: built on logs that undercount input tokens — accumulate accurate runs to calibrate.</span>`;
@@ -407,8 +491,10 @@ function forecast(){
 
 // ---------- demo ----------
 function rint(a,b){ return Math.floor(a+Math.random()*(b-a+1)); }
-function demoData(){
-  const P=pricing();
+function isoUTC(epochSec){ return new Date(epochSec*1000).toISOString().replace(/\.\d{3}Z$/,"Z"); }
+// Build raw demo transcripts (mirrors tokencast.py cmd_demo, incl. the input-token bug and
+// occasional mid-session idle gaps so --segment splits visibly).
+function demoRaw(){
   const models=["claude-opus-4-8","claude-sonnet-4-6","claude-haiku-4-5"];
   const sizes=["s","s","m","m","m","l","xl"];
   const turnsBy={s:[2,6],m:[8,20],l:[25,50],xl:[60,120]};
@@ -417,19 +503,21 @@ function demoData(){
     const size=sizes[rint(0,sizes.length-1)];
     const n=rint(turnsBy[size][0],turnsBy[size][1]);
     const r=Math.random(); const model= r<0.25?models[0] : r<0.90?models[1] : models[2];
-    let outTok=0,cw=0,cr=0,inp=0,tools=0; const files=new Set();
+    let t=1748000000 + i*86400;
+    const entries=[{type:"user", timestamp:isoUTC(t), message:{role:"user", content:"..."}}];
     for(let j=0;j<n;j++){
-      outTok+=rint(300,2500); cr+=rint(20000,220000); cw+=rint(0,30000);
-      inp+=Math.random()<0.75?1:rint(50,1200);
-      if(Math.random()<0.6){ tools++; files.add("src/mod_"+rint(1,12)+".py"); }
+      // occasional 45-180 min idle gap mid-session => a new task unit under --segment
+      t += (j>0 && n>=8 && Math.random()<0.12) ? rint(45,180)*60 : 30;
+      const outTok=rint(300,2500), cr=rint(20000,220000), cw=rint(0,30000);
+      const inp=Math.random()<0.75?1:rint(50,1200);
+      const content=[{type:"text", text:"..."}];
+      if(Math.random()<0.6) content.push({type:"tool_use", name:"Edit", input:{file_path:"src/mod_"+rint(1,12)+".py"}});
+      entries.push({type:"assistant", timestamp:isoUTC(t),
+        message:{role:"assistant", model, content,
+          usage:{input_tokens:inp, output_tokens:outTok,
+                 cache_creation_input_tokens:cw, cache_read_input_tokens:cr}}});
     }
-    const p=priceFor(model,P);
-    const cost=(inp*p.input + cw*p.input*P.cw + cr*p.input*P.cr + outTok*p.output)/1e6;
-    const undercount=Math.round(n*0.75);
-    out.push({session:`sess-${size}-${String(i).padStart(3,"0")}`, project:"demo-project",
-      cost, output:outTok, cache_read:cr, assistant_turns:n, tool_calls:tools, files,
-      files_touched:files.size, models:new Set([model]), undercount, day:"2026-05-01",
-      duration_min:+(n*0.5+rint(0,6)).toFixed(1), _raw:{inp,out:outTok,cw,cr}});
+    out.push({session:`sess-${size}-${String(i).padStart(3,"0")}`, project:"demo-project", entries});
   }
   return out;
 }
@@ -482,7 +570,9 @@ document.getElementById('refreshPrices').onclick=()=>fetchLivePrices(true);
 
 // ---------- wire up ----------
 document.getElementById('demoBtn').onclick=()=>{
-  loadSessions(demoData());
+  DEMO_RAW=demoRaw(); RAW_ENTRIES=null;
+  deriveSessions();
+  document.getElementById('results').classList.remove('hidden'); render();
   document.getElementById('status').textContent="Showing synthetic demo data (40 sessions).";
 };
 document.getElementById('folder').onchange=async (ev)=>{
@@ -490,20 +580,26 @@ document.getElementById('folder').onchange=async (ev)=>{
   const files=[...ev.target.files].filter(f=>f.name.endsWith(".jsonl"));
   if(!files.length){ document.getElementById('status').textContent="No .jsonl files found in that folder."; return; }
   document.getElementById('status').textContent=`Parsing ${files.length} log file(s)…`;
-  const sessions=[];
+  const raw=[];
   for(const f of files){
     const rel=f.webkitRelativePath||f.name; const parts=rel.split("/");
     const project=parts.length>1?parts[parts.length-2]:"(root)";
     const text=await f.text();
-    const s=parseSession(f.name.replace(/\.jsonl$/,""), text, project, P);
-    if(s.assistant_turns>0) sessions.push(s);
+    const entries=parseEntries(text);
+    // Keep raw entries so toggling segmentation never needs to re-read the files.
+    if(reduceEntries(entries, "", project, P).assistant_turns>0)
+      raw.push({name:f.name.replace(/\.jsonl$/,""), project, entries});
   }
-  if(!sessions.length){ document.getElementById('status').textContent="No usable sessions (no token usage found)."; return; }
-  loadSessions(sessions);
-  document.getElementById('status').textContent=`Loaded ${sessions.length} of your sessions — nothing left your browser.`;
+  if(!raw.length){ document.getElementById('status').textContent="No usable sessions (no token usage found)."; return; }
+  RAW_ENTRIES=raw; DEMO_RAW=null;
+  deriveSessions();
+  document.getElementById('results').classList.remove('hidden'); render();
+  document.getElementById('status').textContent=`Loaded ${raw.length} of your sessions — nothing left your browser.`;
 };
 ['cap'].forEach(id=>document.getElementById(id).addEventListener('input',updateCap));
 ['f_files','f_tools','f_count'].forEach(id=>document.getElementById(id).addEventListener('input',forecast));
+document.getElementById('f_segment').addEventListener('change',resegment);
+document.getElementById('f_gap').addEventListener('input',()=>{ if(segmentOn()) resegment(); });
 ['p_opus_in','p_opus_out','p_sonnet_in','p_sonnet_out','p_haiku_in','p_haiku_out','p_cw','p_cr']
   .forEach(id=>document.getElementById(id).addEventListener('input',recompute));
 

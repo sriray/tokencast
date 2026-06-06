@@ -145,63 +145,166 @@ def entry_cost(usage, model):
 # --------------------------------------------------------------------------------------
 # Parsing
 # --------------------------------------------------------------------------------------
-def parse_session(path):
-    """Reduce one JSONL transcript to a session summary with cost + features."""
-    s = {
-        "session": os.path.splitext(os.path.basename(path))[0],
-        "project": os.path.basename(os.path.dirname(path)),
+def _new_summary(session, project):
+    """An empty session/segment summary dict."""
+    return {
+        "session": session,
+        "project": project,
         "cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
         "assistant_turns": 0, "tool_calls": 0, "files": set(),
         "models": set(), "undercount_hits": 0, "accurate": False, "ts_first": None, "ts_last": None,
     }
+
+
+def reduce_entries(entries, session, project):
+    """Reduce a list of already-parsed JSONL dicts to one summary with cost + features.
+
+    Pure: identical for a whole session or a single segment of one (see segment_entries).
+    """
+    s = _new_summary(session, project)
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        if e.get("tokencast_accurate") is True:
+            s["accurate"] = True
+        ts = e.get("timestamp")
+        if ts:
+            s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
+            s["ts_last"]  = max(s["ts_last"], ts) if s["ts_last"] else ts
+        msg = e.get("message") or {}
+        if e.get("type") == "assistant" or msg.get("role") == "assistant":
+            usage = msg.get("usage") or {}
+            model = msg.get("model") or e.get("model")
+            if usage:
+                s["assistant_turns"] += 1
+                s["input"]       += usage.get("input_tokens", 0) or 0
+                s["output"]      += usage.get("output_tokens", 0) or 0
+                s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
+                s["cache_read"]  += usage.get("cache_read_input_tokens", 0) or 0
+                if model:
+                    s["models"].add(model)
+                # Prefer an explicit cost field if the tool wrote one; else compute.
+                s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+                    else entry_cost(usage, model)
+                # Known Claude Code bug: input_tokens is a streaming placeholder,
+                # often 0/1 while real input lives in the cache fields.
+                if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+                    s["undercount_hits"] += 1
+            # tool calls + files touched, from content blocks
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        s["tool_calls"] += 1
+                        if block.get("name") in FILE_TOOLS:
+                            fp = (block.get("input") or {}).get("file_path") \
+                                or (block.get("input") or {}).get("notebook_path")
+                            if fp:
+                                s["files"].add(fp)
+    s["files_touched"] = len(s["files"])
+    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    return s
+
+
+def _read_entries(path):
+    """Read a JSONL transcript into a list of parsed dicts, skipping unparseable lines."""
+    entries = []
     with open(path, "r", errors="ignore") as fh:
         for line in fh:
             line = line.strip()
             if not line:
                 continue
             try:
-                e = json.loads(line)
+                entries.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-            if e.get("tokencast_accurate") is True:
-                s["accurate"] = True
-            ts = e.get("timestamp")
-            if ts:
-                s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
-                s["ts_last"]  = max(s["ts_last"], ts) if s["ts_last"] else ts
+    return entries
+
+
+def parse_session(path):
+    """Reduce one JSONL transcript to a session summary with cost + features."""
+    return reduce_entries(_read_entries(path),
+                          os.path.splitext(os.path.basename(path))[0],
+                          os.path.basename(os.path.dirname(path)))
+
+
+# --------------------------------------------------------------------------------------
+# Segmentation (ROADMAP #2): split one transcript into task-sized units.
+# --------------------------------------------------------------------------------------
+def _epoch(ts):
+    import datetime
+    try:
+        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _has_usage(entry):
+    if not isinstance(entry, dict):
+        return False
+    msg = entry.get("message") or {}
+    if entry.get("type") == "assistant" or msg.get("role") == "assistant":
+        return bool(msg.get("usage"))
+    return False
+
+
+def segment_entries(entries, gap_min=30, split_on_user=False):
+    """Split a transcript's entries (file order) into one-or-more task segments.
+
+    Pure & deterministic. Splits BEFORE an entry when either:
+      - idle gap: gap_min > 0 and this entry's timestamp is > gap_min minutes after the
+        previous *timestamped* entry; or
+      - user boundary (only if split_on_user): this entry is a fresh user turn AND the
+        current segment already holds an assistant turn with usage (so we cut between
+        tasks, not on the leading prompt or on consecutive user/tool-result lines).
+
+    Entries without a parseable timestamp attach to the current segment and don't move the
+    gap reference. Returns a list of lists (never empty unless `entries` is empty).
+    """
+    if not entries:
+        return []
+    gap_s = gap_min * 60.0 if gap_min and gap_min > 0 else None
+    segments, cur = [], []
+    last_ts = None        # epoch of the previous timestamped entry
+    cur_has_turn = False  # has the current segment seen assistant usage yet
+    for e in entries:
+        ts = _epoch((e or {}).get("timestamp")) if isinstance(e, dict) else None
+        split = False
+        if gap_s is not None and ts is not None and last_ts is not None and (ts - last_ts) > gap_s:
+            split = True
+        if (not split) and split_on_user and cur_has_turn and isinstance(e, dict):
             msg = e.get("message") or {}
-            if e.get("type") == "assistant" or msg.get("role") == "assistant":
-                usage = msg.get("usage") or {}
-                model = msg.get("model") or e.get("model")
-                if usage:
-                    s["assistant_turns"] += 1
-                    s["input"]       += usage.get("input_tokens", 0) or 0
-                    s["output"]      += usage.get("output_tokens", 0) or 0
-                    s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
-                    s["cache_read"]  += usage.get("cache_read_input_tokens", 0) or 0
-                    if model:
-                        s["models"].add(model)
-                    # Prefer an explicit cost field if the tool wrote one; else compute.
-                    s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
-                        else entry_cost(usage, model)
-                    # Known Claude Code bug: input_tokens is a streaming placeholder,
-                    # often 0/1 while real input lives in the cache fields.
-                    if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
-                        s["undercount_hits"] += 1
-                # tool calls + files touched, from content blocks
-                content = msg.get("content")
-                if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
-                            s["tool_calls"] += 1
-                            if block.get("name") in FILE_TOOLS:
-                                fp = (block.get("input") or {}).get("file_path") \
-                                    or (block.get("input") or {}).get("notebook_path")
-                                if fp:
-                                    s["files"].add(fp)
-    s["files_touched"] = len(s["files"])
-    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
-    return s
+            if e.get("type") == "user" or msg.get("role") == "user":
+                split = True
+        if split and cur:
+            segments.append(cur)
+            cur, cur_has_turn = [], False
+        cur.append(e)
+        if _has_usage(e):
+            cur_has_turn = True
+        if ts is not None:
+            last_ts = ts
+    if cur:
+        segments.append(cur)
+    return segments
+
+
+def parse_session_segments(path, gap_min=30, split_on_user=False):
+    """Parse one transcript into a list of task-summaries (one per kept segment).
+
+    A segment with no assistant usage is dropped (mirrors load's assistant_turns>0 filter).
+    Session ids are suffixed #1/#2/... only when more than one segment is kept.
+    """
+    entries = _read_entries(path)
+    base = os.path.splitext(os.path.basename(path))[0]
+    project = os.path.basename(os.path.dirname(path))
+    segs = segment_entries(entries, gap_min=gap_min, split_on_user=split_on_user)
+    summaries = [reduce_entries(seg, base, project) for seg in segs]
+    kept = [s for s in summaries if s["assistant_turns"] > 0]
+    if len(kept) > 1:
+        for i, s in enumerate(kept, 1):
+            s["session"] = f"{base}#{i}"
+    return kept
 
 
 def _duration_min(t0, t1):
@@ -217,16 +320,32 @@ def _duration_min(t0, t1):
 
 
 def load(root):
-    if os.path.isfile(root) and root.endswith(".jsonl"):
-        paths = [root]
-    else:
-        paths = glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)
+    paths = _glob_jsonl(root)
     sessions = []
     for p in paths:
         try:
             sess = parse_session(p)
             if sess["assistant_turns"] > 0:
                 sessions.append(sess)
+        except Exception as ex:
+            print(f"  ! skipped {p}: {ex}", file=sys.stderr)
+    return sessions
+
+
+def _glob_jsonl(root):
+    if os.path.isfile(root) and root.endswith(".jsonl"):
+        return [root]
+    return glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)
+
+
+def load_segmented(root, gap_min=30, split_on_user=False):
+    """Like load(), but split each transcript into task-sized segments first (ROADMAP #2)."""
+    sessions = []
+    for p in _glob_jsonl(root):
+        try:
+            for seg in parse_session_segments(p, gap_min=gap_min, split_on_user=split_on_user):
+                if seg["assistant_turns"] > 0:
+                    sessions.append(seg)
         except Exception as ex:
             print(f"  ! skipped {p}: {ex}", file=sys.stderr)
     return sessions
@@ -254,7 +373,12 @@ def money(x):
 # Commands
 # --------------------------------------------------------------------------------------
 def cmd_report(args):
-    sessions = load(args.path)
+    segment = getattr(args, "segment", False)
+    if segment:
+        sessions = load_segmented(args.path, getattr(args, "gap_min", 30),
+                                  getattr(args, "split_on_user", False))
+    else:
+        sessions = load(args.path)
     if not sessions:
         print(f"No usable sessions found under {args.path}. Try `demo` first.")
         return
@@ -274,7 +398,11 @@ def cmd_report(args):
     print("=" * 68)
     print("TokenCast - spend attribution")
     print("=" * 68)
-    print(f"Sessions analyzed : {len(sessions)}")
+    if segment:
+        gap = getattr(args, "gap_min", 30)
+        print(f"Tasks analyzed    : {len(sessions)}  (sessions segmented at idle gaps >{gap} min)")
+    else:
+        print(f"Sessions analyzed : {len(sessions)}")
     print(f"Total spend       : {money(total)}")
     print(f"Mean / session    : {money(total/len(sessions))}")
     print(f"Per-task spread   : p50 {money(pct(costs,.5))}   "
@@ -458,7 +586,15 @@ def _knn_forecast(sessions, target):
 
 
 def cmd_forecast(args):
-    pool = _dedup_sessions(load(args.path) + load(getattr(args, "runs", "./runs")))
+    segment = getattr(args, "segment", False)
+    if segment:
+        gap = getattr(args, "gap_min", 30)
+        sou = getattr(args, "split_on_user", False)
+        loaded = load_segmented(args.path, gap, sou) + \
+            load_segmented(getattr(args, "runs", "./runs"), gap, sou)
+    else:
+        loaded = load(args.path) + load(getattr(args, "runs", "./runs"))
+    pool = _dedup_sessions(loaded)
     accurate = [s for s in pool if s.get("accurate")]
     sessions, accurate_basis = (accurate, True) if len(accurate) >= 5 else (pool, False)
     if len(sessions) < 5:
@@ -489,6 +625,11 @@ def cmd_forecast(args):
           f"~{target['tool_calls']:.0f} tool calls")
     print(f"Matched against {k} most similar past tasks (of {len(sessions)}). "
           f"Neighbor fit: {match}.")
+    if segment:
+        gap = getattr(args, "gap_min", 30)
+        extra = ", new user turns" if getattr(args, "split_on_user", False) else ""
+        print(f"Sessions segmented into tasks at idle gaps >{gap} min{extra} "
+              "(a 'task' ~= a planner's unit, not a whole session).")
     if accurate_basis:
         print(f"Calibrated on {len(sessions)} accurate harness runs (real token counts).")
     else:
@@ -588,10 +729,17 @@ def cmd_demo(args):
         model = random.choices(models, weights=[0.25, 0.65, 0.10])[0]
         path = os.path.join(out, "demo-project", f"sess-{size}-{i:03d}.jsonl")
         with open(path, "w") as fh:
-            t0 = 1748000000 + i * 3600
-            fh.write(json.dumps({"type": "user", "timestamp": _iso(t0),
+            t0 = 1748000000 + i * 86400  # one session per day, room for hour-long gaps
+            t = t0
+            fh.write(json.dumps({"type": "user", "timestamp": _iso(t),
                                  "message": {"role": "user", "content": "..."}}) + "\n")
             for j in range(n):
+                # Occasionally the engineer walks away mid-session and resumes on a new
+                # task hours later -- a large idle gap that --segment splits on.
+                if j > 0 and n >= 8 and random.random() < 0.12:
+                    t += random.randint(45, 180) * 60  # 45-180 min idle gap
+                else:
+                    t += 30
                 out_tok = random.randint(300, 2500)
                 cache_read = random.randint(20_000, 220_000)  # the real cost driver
                 cache_write = random.randint(0, 30_000)
@@ -602,7 +750,7 @@ def cmd_demo(args):
                     tool = random.choice(list(FILE_TOOLS))
                     content.append({"type": "tool_use", "name": tool,
                                     "input": {"file_path": f"src/mod_{random.randint(1, 12)}.py"}})
-                rec = {"type": "assistant", "timestamp": _iso(t0 + j * 30),
+                rec = {"type": "assistant", "timestamp": _iso(t),
                        "message": {"role": "assistant", "model": model, "content": content,
                                    "usage": {"input_tokens": inp, "output_tokens": out_tok,
                                              "cache_creation_input_tokens": cache_write,
@@ -627,6 +775,12 @@ def main():
     r = sub.add_parser("report", help="attribute past spend from logs")
     r.add_argument("path", nargs="?", default=os.path.expanduser("~/.claude/projects"))
     r.add_argument("--cap", type=float, default=None, help="show what a per-session hard cap would clip")
+    r.add_argument("--segment", action="store_true",
+                   help="split each session into task-sized units (by idle gaps) before reporting")
+    r.add_argument("--gap-min", type=int, default=30,
+                   help="idle-gap threshold in minutes for --segment (default 30; 0 disables the gap rule)")
+    r.add_argument("--split-on-user", action="store_true",
+                   help="with --segment, also split at fresh user turns between tasks")
     r.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
     r.set_defaults(func=cmd_report)
 
@@ -638,6 +792,13 @@ def main():
     f.add_argument("--tools", type=int, default=None, help="expected # tool calls")
     f.add_argument("--output", type=int, default=None, help="expected output tokens (optional)")
     f.add_argument("--count", type=int, default=None, help="# of similar tasks to roll up into a sprint/project estimate")
+    f.add_argument("--segment", action="store_true",
+                   help="split each session into task-sized units (by idle gaps) so 'a task' "
+                        "matches a planner's unit, not a whole session")
+    f.add_argument("--gap-min", type=int, default=30,
+                   help="idle-gap threshold in minutes for --segment (default 30; 0 disables the gap rule)")
+    f.add_argument("--split-on-user", action="store_true",
+                   help="with --segment, also split at fresh user turns between tasks")
     f.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
     f.set_defaults(func=cmd_forecast)
 
