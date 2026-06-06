@@ -28,8 +28,8 @@ Usage:
     python tokencast.py report ./sample_logs                     # (secondary) past spend
 """
 
-import argparse, glob, json, math, os, random, statistics, sys
-from collections import defaultdict
+import argparse, glob, json, math, os, random, re, statistics, sys
+from collections import defaultdict, namedtuple
 
 # --- Pricing (USD per 1M tokens). VERIFY against platform.claude.com/docs pricing;
 #     these reflect rates as of mid-2026 and WILL drift. Editing this is the point. ---
@@ -675,6 +675,195 @@ def cmd_forecast(args):
               f"files={s['files_touched']:>2} tools={s['tool_calls']:>3} turns={s['assistant_turns']:>3}")
 
 
+# --------------------------------------------------------------------------------------
+# estimate (ROADMAP #5): annotate a plan/ticket markdown file with per-ticket p90
+# cost+time and a sprint total -- the literal "cost line in the plan". Reuses the SAME
+# kNN forecaster and accuracy bridge as `forecast`; all helpers below are NEW + pure.
+# See docs/superpowers/specs/2026-06-06-estimate-and-packaging-design.md.
+# --------------------------------------------------------------------------------------
+
+PlanTicket = namedtuple("PlanTicket", ["text", "files", "tools", "output"])
+
+# A line is a ticket iff it starts (after indent) with a bullet (- * +, incl. GitHub
+# checkboxes) or an ordered-list marker (1. / 2) ). Headings, blanks, prose are ignored.
+_BULLET_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+(.*)$")
+_CHECKBOX_RE = re.compile(r"^\[[ xX]\]\s+(.*)$")
+# Trailing parenthesised size hint, e.g. "(files=8 tools=30 output=4000)".
+_HINT_RE = re.compile(r"\s*\(([^()]*)\)\s*$")
+
+
+def _parse_size_hint(text):
+    """Split a trailing '(files=.. tools=.. output=..)' hint off `text`.
+
+    Returns (clean_text, files, tools, output). If the parenthetical isn't a valid
+    hint (unknown keys / malformed), it's left in the text untouched and all sizes are
+    None -- so ordinary prose parentheses never get mangled.
+    """
+    m = _HINT_RE.search(text)
+    if not m:
+        return text, None, None, None
+    body = m.group(1).strip()
+    if not body:
+        return text, None, None, None
+    sizes = {"files": None, "tools": None, "output": None}
+    for tok in body.split():
+        if "=" not in tok:
+            return text, None, None, None  # not a hint group; leave as-is
+        key, _, val = tok.partition("=")
+        key = key.strip().lower()
+        if key not in sizes:
+            return text, None, None, None
+        try:
+            sizes[key] = int(val.strip())
+        except ValueError:
+            return text, None, None, None
+    clean = text[: m.start()].rstrip()
+    return clean, sizes["files"], sizes["tools"], sizes["output"]
+
+
+def parse_plan(text):
+    """Pure: parse plan markdown into a list of PlanTicket.
+
+    Each bullet / checkbox / ordered-list line is a ticket; headings, blanks, and prose
+    are ignored. A trailing '(files=.. tools=.. output=..)' hint is parsed off and removed
+    from the ticket text. See the module-level rule + the design spec.
+    """
+    tickets = []
+    for raw in text.splitlines():
+        m = _BULLET_RE.match(raw)
+        if not m:
+            continue
+        body = m.group(2).strip()
+        cb = _CHECKBOX_RE.match(body)
+        if cb:
+            body = cb.group(1).strip()
+        body, files, tools, output = _parse_size_hint(body)
+        body = body.strip()
+        if not body:
+            continue
+        tickets.append(PlanTicket(body, files, tools, output))
+    return tickets
+
+
+def _estimate_pool(args):
+    """Build the calibration pool exactly like cmd_forecast: history + runs, deduped,
+    preferring the accurate subset when >=5 exist. Returns (sessions, accurate_basis).
+    """
+    if getattr(args, "segment", False):
+        gap = getattr(args, "gap_min", 30)
+        sou = getattr(args, "split_on_user", False)
+        loaded = load_segmented(args.path, gap, sou) + \
+            load_segmented(getattr(args, "runs", "./runs"), gap, sou)
+    else:
+        loaded = load(args.path) + load(getattr(args, "runs", "./runs"))
+    pool = _dedup_sessions(loaded)
+    accurate = [s for s in pool if s.get("accurate")]
+    return (accurate, True) if len(accurate) >= 5 else (pool, False)
+
+
+def cmd_estimate(args):
+    try:
+        with open(args.plan, encoding="utf-8") as fh:
+            tickets = parse_plan(fh.read())
+    except OSError as ex:
+        raise SystemExit(f"tokencast: cannot read plan file {args.plan}: {ex}")
+    if not tickets:
+        print(f"No tickets found in {args.plan}. Expected markdown bullets "
+              "(- / * / +, incl. [ ] checkboxes) or an ordered list (1. / 2)).")
+        return
+
+    sessions, accurate_basis = _estimate_pool(args)
+    if len(sessions) < 5:
+        print("Need at least ~5 historical sessions to calibrate a forecast.")
+        return
+    means = {f: statistics.mean(s[f] for s in sessions) for f in _forecast_features()}
+
+    print("=" * 68)
+    print("TokenCast - plan estimate (p90 cost + time per ticket)")
+    print("=" * 68)
+    if accurate_basis:
+        print(f"Basis: calibrated on {len(sessions)} accurate harness runs (real token counts).")
+    else:
+        print("Basis: Claude Code logs that undercount input tokens -- these are a FLOOR.")
+        print("       Accumulate accurate runs (tokencast-optimize run/auto) to calibrate.")
+    if getattr(args, "segment", False):
+        gap = getattr(args, "gap_min", 30)
+        extra = ", new user turns" if getattr(args, "split_on_user", False) else ""
+        print(f"Sessions segmented into tasks at idle gaps >{gap} min{extra}.")
+    print(f"Matched each of {len(tickets)} tickets against its nearest past tasks (of "
+          f"{len(sessions)}).")
+    print()
+
+    sum_cost = 0.0
+    sum_time = 0.0
+    have_time = False
+    ks = []
+    # Accumulate the matched neighbour pool (cost, time, weight) across all tickets for a
+    # Monte-Carlo sprint roll-up consistent with `forecast`.
+    mc_costs, mc_cweights, mc_durs, mc_dweights = [], [], [], []
+    for t in tickets:
+        target = {}
+        files = t.files if t.files is not None else args.files
+        tools = t.tools if t.tools is not None else args.tools
+        output = t.output if t.output is not None else args.output
+        if files is not None:
+            target["files_touched"] = files
+        if tools is not None:
+            target["tool_calls"] = tools
+        if output is not None:
+            target["output"] = output
+        neighbors, weights, ncosts, ndurs, k, _match = _knn_forecast(sessions, target)
+        ks.append(k)
+        cweights = list(weights)
+        dweights = [w for s, w in zip(neighbors, weights) if s["duration_min"] is not None]
+        p90c = _weighted_pct(ncosts, cweights, .9)
+        sum_cost += p90c
+        mc_costs += ncosts
+        mc_cweights += cweights
+        if ndurs:
+            have_time = True
+            p90t = _weighted_pct(ndurs, dweights, .9)
+            sum_time += p90t
+            mc_durs += ndurs
+            mc_dweights += dweights
+            time_s = _mins(p90t)
+        else:
+            time_s = "  n/a"
+        hint = ""
+        if t.files is not None or t.tools is not None or t.output is not None:
+            bits = []
+            if t.files is not None:
+                bits.append(f"files={t.files}")
+            if t.tools is not None:
+                bits.append(f"tools={t.tools}")
+            if t.output is not None:
+                bits.append(f"output={t.output}")
+            hint = "  [" + " ".join(bits) + "]"
+        print(f"  p90 {money(p90c):>9}   p90 {time_s:>8}   {t.text}{hint}")
+
+    print()
+    time_str = f"   ~{_mins(sum_time)}" if have_time else ""
+    print(f"Sprint total (sum of per-ticket p90s): {money(sum_cost)}{time_str}  (sequential)")
+
+    # Monte-Carlo roll-up over the union of matched draws, len(tickets) draws per trial.
+    if len(tickets) > 1 and mc_costs:
+        random.seed(0)
+        TRIALS = 5000
+        totals_c, totals_t = [], []
+        for _ in range(TRIALS):
+            totals_c.append(sum(random.choices(mc_costs, weights=mc_cweights, k=len(tickets))))
+            if mc_durs:
+                totals_t.append(sum(random.choices(mc_durs, weights=mc_dweights, k=len(tickets))))
+        line = (f"Monte-Carlo total ({TRIALS} trials): "
+                f"p50 {money(pct(totals_c,.5))}   p90 {money(pct(totals_c,.9))}")
+        if totals_t:
+            line += f"   (time p90 {_mins(pct(totals_t,.9))}, sequential)"
+        print(line)
+    print()
+    print("  -> Put the p90 in the plan, not the p50. Parallelize across engineers to")
+    print("     compress the timeline; the same task does not cost the same twice.")
+
+
 def cmd_budget(args):
     import budget  # lazy import avoids a tokencast<->budget cycle
     import datetime
@@ -801,6 +990,27 @@ def main():
                    help="with --segment, also split at fresh user turns between tasks")
     f.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
     f.set_defaults(func=cmd_forecast)
+
+    e = sub.add_parser("estimate", help="annotate a plan.md's tickets with p90 cost+time")
+    e.add_argument("plan", help="plan/ticket markdown file (bullets / checkboxes / ordered list)")
+    e.add_argument("path", nargs="?", default=os.path.expanduser("~/.claude/projects"),
+                   help="history root (same as forecast)")
+    e.add_argument("--runs", default="./runs", help="accurate TokenCast run logs")
+    e.add_argument("--files", type=int, default=None,
+                   help="default expected # files per ticket (inline (files=..) hints override)")
+    e.add_argument("--tools", type=int, default=None,
+                   help="default expected # tool calls per ticket (inline hints override)")
+    e.add_argument("--output", type=int, default=None,
+                   help="default expected output tokens per ticket (inline hints override)")
+    e.add_argument("--segment", action="store_true",
+                   help="split transcripts into task-sized units at idle gaps before matching")
+    e.add_argument("--gap-min", type=int, default=30,
+                   help="idle-gap minutes that start a new segment (with --segment)")
+    e.add_argument("--split-on-user", action="store_true",
+                   help="also split at fresh user turns (with --segment)")
+    e.add_argument("--refresh-prices", action="store_true",
+                   help="pull current prices from the live cost map")
+    e.set_defaults(func=cmd_estimate)
 
     d = sub.add_parser("demo", help="generate synthetic logs to try the tool")
     d.add_argument("--out", default="./sample_logs")
