@@ -17,6 +17,25 @@ afternoon gets you a usable forecast off logs that are *known to be wrong* — s
 what Anthropic or OpenAI could ship as a "cost preview" inside plan mode, sitting on
 clean, cross-customer telemetry. They're the only ones who can do it accurately. They should.
 
+## Install
+
+```bash
+pipx install tokencast        # light tier as a CLI (no dependencies)
+uvx tokencast forecast --files 8 --tools 30   # or run it ephemerally
+pip install tokencast         # or into your current environment
+```
+
+That gives you the stdlib-only light tier (`forecast` / `report` / `estimate` / `budget` /
+`demo`). The heavy optimizer tier (the `tokencast-optimize` command, which needs the Claude
+Agent SDK) installs via the extra:
+
+```bash
+pip install 'tokencast[optimize]'
+```
+
+No install at all? Just double-click **`tokencast.html`** (see below), or run
+`python tokencast.py …` directly from a clone.
+
 ## How this differs from existing tools
 
 Telling you what you *already spent* is a solved, crowded problem — [ccusage](https://ccusage.com/),
