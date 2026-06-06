@@ -331,7 +331,8 @@ def cmd_auto(args):
     hist_n, p90 = estimate_cost(args.history)
     if p90 is not None:
         total = p90 * n_tasks * (n_cfgs * args.repeats + n_decomp)
-        extra = f" + {n_decomp} decomposition strategies/task" if args.decompose else ""
+        _dword = "strategy" if n_decomp == 1 else "strategies"
+        extra = f" + {n_decomp} decomposition {_dword}/task" if args.decompose else ""
         print(f"Pre-flight: {n_cfgs} configs x {n_tasks} tasks x {args.repeats} repeats "
               f"(up to {n_generated} generated){extra}; est. total ~ {_fmt_cost(total)} "
               f"(per-task p90, modeled at list prices)", file=sys.stderr)
@@ -361,6 +362,31 @@ def cmd_auto(args):
     if summary["decompose"] is not None:
         _print_decompose_results(summary["decompose"], args.out)
     print(f"Summary:  {os.path.join(args.out, 'auto.json')}")
+
+
+def cmd_doctor(args):
+    """Preflight for the real-SDK optimizer path: is claude-agent-sdk importable, and is an
+    API key present? Reports status and the exact command to run the gated live smoke."""
+    import importlib.util
+    sdk = importlib.util.find_spec("claude_agent_sdk") is not None
+    key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    print("=" * 60)
+    print("TokenCast - optimizer preflight (doctor)")
+    print("=" * 60)
+    print(f"  claude-agent-sdk installed : {'yes' if sdk else 'NO'}")
+    print(f"  ANTHROPIC_API_KEY set      : {'yes' if key else 'no'}")
+    print()
+    if sdk:
+        print("Ready: the real-SDK paths (run / eval run / optimize / decompose / auto) can run.")
+        if not key:
+            print("No ANTHROPIC_API_KEY in the env -- that's fine if you rely on Claude Code's auth.")
+        print("Run the gated live smoke (spends a little real money/credits):")
+        print("  TOKENCAST_LIVE=1 python -m pytest -k live -q")
+    else:
+        print("Not ready: install the optimizer extra first, then re-run `tokencast-optimize doctor`:")
+        print('  pip install -e ".[optimize]"')
+    print()
+    print("The light tier (tokencast.py forecast/report/budget) needs none of this -- it's offline.")
 
 
 def main():
@@ -472,6 +498,10 @@ def main():
     a.add_argument("--decompose-generate", type=int, default=2,
                    help="propose N decompositions per task when --decompose (default 2)")
     a.set_defaults(func=cmd_auto)
+
+    doc = sub.add_parser("doctor",
+                         help="check whether the real-SDK optimizer path can run (SDK + auth)")
+    doc.set_defaults(func=cmd_doctor)
 
     args = ap.parse_args()
     args.func(args)
