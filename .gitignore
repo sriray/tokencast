@@ -12,8 +12,16 @@ __pycache__/
 .venv/
 venv/
 
+# build artifacts
+dist/
+build/
+
 # optimizer run outputs
 runs/
+tc_*/
+
+# agent worktrees
+.claude/worktrees/
 
 # os / editor
 .DS_Store
