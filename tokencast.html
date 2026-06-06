@@ -171,7 +171,7 @@ function entryCost(u,model,P){
 
 // ---------- parsing ----------
 function parseSession(name, text, project, P){
-  const s={session:name, project:project||"(root)", cost:0, output:0,
+  const s={session:name, project:project||"(root)", cost:0, output:0, cache_read:0,
            assistant_turns:0, tool_calls:0, files:new Set(), models:new Set(),
            undercount:0, accurate:false, day:null, tsFirst:null, tsLast:null};
   for(const line of text.split("\n")){
@@ -187,7 +187,7 @@ function parseSession(name, text, project, P){
     if(e.type==="assistant" || msg.role==="assistant"){
       const u=msg.usage; const model=msg.model||e.model;
       if(u){
-        s.assistant_turns++; s.output+=u.output_tokens||0;
+        s.assistant_turns++; s.output+=u.output_tokens||0; s.cache_read+=u.cache_read_input_tokens||0;
         if(model) s.models.add(model);
         s.cost += (typeof e.costUSD==="number") ? e.costUSD : entryCost(u,model,P);
         if((u.output_tokens||0)>0 && (u.input_tokens||0)<=1) s.undercount++;
@@ -213,6 +213,57 @@ function mean(a){ return a.reduce((s,v)=>s+v,0)/(a.length||1); }
 function pstd(a){ const m=mean(a); return Math.sqrt(mean(a.map(v=>(v-m)**2)))||1; }
 function mins(x){ if(x==null) return "n/a"; return x>=60 ? (x/60).toFixed(1)+" h" : Math.round(x)+" min"; }
 function mc(arr,count,trials){ const out=[]; for(let t=0;t<trials;t++){ let s=0; for(let i=0;i<count;i++) s+=arr[Math.floor(Math.random()*arr.length)]; out.push(s);} return out; }
+
+// ---------- forecast model (mirrors tokencast.py: distance-weighted kNN,
+// log-scaled skewed features incl. cache_read, adaptive k, neighbor-spread label) ----------
+const LOG_FEATURES=new Set(["output","tool_calls","cache_read"]);
+function fcFeatures(){ return ["files_touched","tool_calls","output","assistant_turns","cache_read"]; }
+function fcScale(v,f){ v=v||0; return LOG_FEATURES.has(f)?Math.log1p(v):v; }
+function adaptiveK(n){ return Math.min(Math.max(5,Math.floor(n/4)), Math.max(5,Math.floor(3*n/5))); }
+function median(a){ const x=[...a].sort((p,q)=>p-q); if(!x.length) return 0; const m=Math.floor(x.length/2);
+  return x.length%2?x[m]:(x[m-1]+x[m])/2; }
+function neighborWeights(d){ const pos=d.filter(x=>x>0); let med=pos.length?median(pos):1; if(med<=0)med=1;
+  return d.map(x=>1/(1+x/med)); }
+function weightedPct(vals,ws,q){
+  if(!vals.length) return 0;
+  const pairs=vals.map((v,i)=>[v,ws[i]]).sort((a,b)=>a[0]-b[0]);
+  const xs=pairs.map(p=>p[0]), w=pairs.map(p=>p[1]), n=xs.length;
+  if(n===1) return xs[0];
+  const total=w.reduce((a,b)=>a+b,0); if(total<=0) return pct(vals,q);
+  const cum=[]; let pre=0; for(const x of w){ cum.push(pre); pre+=x; }
+  const span=total-w[n-1]; if(span<=0) return xs[n-1];
+  const positions=cum.map(c=>c/span);
+  if(q<=positions[0]) return xs[0];
+  if(q>=positions[n-1]) return xs[n-1];
+  for(let i=1;i<n;i++){ if(q<=positions[i]){ const lo=positions[i-1],hi=positions[i];
+    const frac=hi===lo?0:(q-lo)/(hi-lo); return xs[i-1]+frac*(xs[i]-xs[i-1]); } }
+  return xs[n-1];
+}
+function matchLabel(d){
+  if(d.length<2) return "tight";
+  const m=mean(d); if(m<=0) return "tight";
+  const cv=Math.sqrt(mean(d.map(v=>(v-m)**2)))/m;
+  return cv<0.35?"tight":(cv<0.75?"moderate":"loose");
+}
+// weighted Monte Carlo: sample neighbors proportional to their weights
+function mcWeighted(vals,ws,count,trials){
+  const total=ws.reduce((a,b)=>a+b,0)||1; const cdf=[]; let acc=0;
+  for(const w of ws){ acc+=w/total; cdf.push(acc); }
+  const pick=()=>{ const r=Math.random(); for(let i=0;i<cdf.length;i++) if(r<=cdf[i]) return vals[i]; return vals[vals.length-1]; };
+  const out=[]; for(let t=0;t<trials;t++){ let s=0; for(let i=0;i<count;i++) s+=pick(); out.push(s); } return out;
+}
+function knnForecast(sessions,target){
+  const feats=fcFeatures(), means={}, stds={}, scaled={};
+  feats.forEach(f=>{ const raw=sessions.map(s=>s[f]); means[f]=mean(raw);
+    const sc=sessions.map(s=>fcScale(s[f],f)); scaled[f]=sc; stds[f]=pstd(sc); });
+  const tgt={}; feats.forEach(f=>{ tgt[f]=fcScale((f in target)?target[f]:means[f], f); });
+  const dist=s=>Math.sqrt(feats.reduce((a,f)=>a+((fcScale(s[f],f)-tgt[f])/stds[f])**2,0));
+  const k=adaptiveK(sessions.length);
+  const ranked=[...sessions].sort((a,b)=>dist(a)-dist(b)).slice(0,k);
+  const dists=ranked.map(dist);
+  const weights=neighborWeights(dists);
+  return {ranked,weights,k,means,label:matchLabel(dists)};
+}
 
 // ---------- state ----------
 let SESSIONS=[];
@@ -323,36 +374,31 @@ function forecast(){
   const basis=accurateBasis?accurate:SESSIONS;
   if(basis.length<5){ document.getElementById('forecastOut').innerHTML=
     `<span class="muted">Need ~5+ tasks to calibrate.</span>`; return; }
-  const feats=["files_touched","tool_calls","output","assistant_turns"];
-  const stds={}, means={};
-  feats.forEach(f=>{ const a=basis.map(s=>s[f]); means[f]=mean(a); stds[f]=pstd(a); });
-  const target={
-    files_touched:parseFloat(document.getElementById('f_files').value)||means.files_touched,
-    tool_calls:parseFloat(document.getElementById('f_tools').value)||means.tool_calls,
-    output:means.output, assistant_turns:means.assistant_turns,
-  };
-  const dist=s=>Math.sqrt(feats.reduce((a,f)=>a+((s[f]-target[f])/stds[f])**2,0));
-  const k=Math.max(5,Math.floor(basis.length/4));
-  const nearObj=[...basis].sort((a,b)=>dist(a)-dist(b)).slice(0,k);
-  const near=nearObj.map(s=>s.cost);
-  const durs=nearObj.map(s=>s.duration_min).filter(x=>x!=null);
+  const target={};
+  const fv=parseFloat(document.getElementById('f_files').value); if(!isNaN(fv)) target.files_touched=fv;
+  const tv=parseFloat(document.getElementById('f_tools').value); if(!isNaN(tv)) target.tool_calls=tv;
+  const {ranked,weights,k,label}=knnForecast(basis,target);
+  const near=ranked.map(s=>s.cost);
+  const cweights=weights;
+  const durObj=ranked.map((s,i)=>({d:s.duration_min,w:weights[i]})).filter(x=>x.d!=null);
+  const durs=durObj.map(x=>x.d), dweights=durObj.map(x=>x.w);
   const count=Math.max(1,parseInt(document.getElementById('f_count').value)||1);
 
   let html =
     `<div style="margin-bottom:6px;"><b>Per task</b></div>`+
-    `Cost — p50 <b>${money(pct(near,.5))}</b> · p90 <b>${money(pct(near,.9))}</b> · p95 ${money(pct(near,.95))}<br>`+
-    (durs.length? `Time — p50 <b>${mins(pct(durs,.5))}</b> · p90 <b>${mins(pct(durs,.9))}</b> · p95 ${mins(pct(durs,.95))}<br>
+    `Cost — p50 <b>${money(weightedPct(near,cweights,.5))}</b> · p90 <b>${money(weightedPct(near,cweights,.9))}</b> · p95 ${money(weightedPct(near,cweights,.95))}<br>`+
+    (durs.length? `Time — p50 <b>${mins(weightedPct(durs,dweights,.5))}</b> · p90 <b>${mins(weightedPct(durs,dweights,.9))}</b> · p95 ${mins(weightedPct(durs,dweights,.95))}<br>
       <span class="muted" style="font-size:12px;">wall-clock incl. think/idle — a rough timeline proxy</span><br>`:"");
 
   if(count>1){
-    const tc=mc(near,count,4000);
-    const td=durs.length? mc(durs,count,4000):null;
+    const tc=mcWeighted(near,cweights,count,4000);
+    const td=durs.length? mcWeighted(durs,dweights,count,4000):null;
     html += `<div style="margin:12px 0 6px;"><b>Sprint of ${count} similar tasks</b></div>`+
       `Budget — p50 <b>${money(pct(tc,.5))}</b> · p90 <b>${money(pct(tc,.9))}</b><br>`+
       (td? `Effort — p50 <b>${mins(pct(td,.5))}</b> · p90 <b>${mins(pct(td,.9))}</b>
         <span class="muted" style="font-size:12px;">(sequential; parallelize to compress)</span><br>`:"");
   }
-  html += `<span class="muted">Put the p90 in your estimate. Matched on your ${k} most similar past tasks.</span>`;
+  html += `<span class="muted">Put the p90 in your estimate. Matched on your ${k} most similar past tasks · neighbor fit: ${label}.</span>`;
   html += accurateBasis
     ? `<br><span class="muted" style="font-size:12px;">Calibrated on ${basis.length} accurate runs (real token counts).</span>`
     : `<br><span class="muted" style="font-size:12px;">Floor: built on logs that undercount input tokens — accumulate accurate runs to calibrate.</span>`;
@@ -381,7 +427,7 @@ function demoData(){
     const cost=(inp*p.input + cw*p.input*P.cw + cr*p.input*P.cr + outTok*p.output)/1e6;
     const undercount=Math.round(n*0.75);
     out.push({session:`sess-${size}-${String(i).padStart(3,"0")}`, project:"demo-project",
-      cost, output:outTok, assistant_turns:n, tool_calls:tools, files,
+      cost, output:outTok, cache_read:cr, assistant_turns:n, tool_calls:tools, files,
       files_touched:files.size, models:new Set([model]), undercount, day:"2026-05-01",
       duration_min:+(n*0.5+rint(0,6)).toFixed(1), _raw:{inp,out:outTok,cw,cr}});
   }

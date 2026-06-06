@@ -61,9 +61,13 @@ python tokencast.py forecast --files 12 --tools 40
 ## What it does
 
 - **forecast** (the point) — finds the *k* most similar past tasks by feature vector
-  (files touched, tool calls, output tokens, turns) and returns a **cost and time** estimate
-  as a range. Pass `--count N` to roll up a sprint/project total via Monte Carlo. This is the
-  number you put in your estimate — calibrated on your history, not a human guess.
+  (files touched, tool calls, output tokens, turns, and cache-read tokens — the real cost
+  driver) and returns a **cost and time** estimate as a range. It's a *distance-weighted*
+  k-nearest-neighbors: closer past tasks count more, skewed features are compared on a log
+  scale, and the output reports a one-word "neighbor fit" (tight / moderate / loose) so you
+  can tell a calibrated estimate from a thin-history guess. Pass `--count N` to roll up a
+  sprint/project total via Monte Carlo. This is the number you put in your estimate —
+  calibrated on your history, not a human guess.
 - **report** (secondary) — total spend, per-task distribution (p50/p90/p95/max), breakdown by
   project and model, your most expensive tasks, and an optional `--cap` overlay showing how many
   tasks a hard ceiling would have cut off mid-work. Tools like ccusage already do this well.

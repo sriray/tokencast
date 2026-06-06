@@ -337,6 +337,126 @@ def _dedup_sessions(sessions):
     return out
 
 
+# --------------------------------------------------------------------------------------
+# Forecast model (ROADMAP #3): distance-weighted kNN, log-scaled skewed features,
+# cache_read as a feature, adaptive k, and a neighbor-spread confidence label.
+# Kept as small pure helpers so cmd_forecast's body stays minimal and merge-friendly.
+# See docs/superpowers/specs/2026-06-06-forecast-model-design.md.
+# --------------------------------------------------------------------------------------
+
+# Skewed, heavy-tailed features are standardized on log1p so distance reflects
+# proportional (not absolute-outlier) similarity. Bounded counts stay linear.
+_LOG_FEATURES = {"output", "tool_calls", "cache_read"}
+
+
+def _forecast_features():
+    """The feature vector. cache_read is the real cost driver (cache-read tokens)."""
+    return ["files_touched", "tool_calls", "output", "assistant_turns", "cache_read"]
+
+
+def _scale(value, feature):
+    """Per-feature coordinate transform: log1p for skewed features, identity otherwise."""
+    v = value or 0
+    return math.log1p(v) if feature in _LOG_FEATURES else float(v)
+
+
+def _adaptive_k(n):
+    """Neighborhood size: legacy max(5, n//4), but capped so a tiny pool isn't 'all neighbors'.
+
+    For n >= 9 this equals max(5, n//4) exactly; it only tightens very small pools,
+    and never drops below the floor of 5.
+    """
+    base = max(5, n // 4)
+    cap = max(5, (3 * n) // 5)  # <= ~60% of the pool
+    return min(base, cap)
+
+
+def _neighbor_weights(distances):
+    """Closer neighbors weigh more: 1 / (1 + d / median_d). Scale-free, always positive."""
+    pos = [d for d in distances if d > 0]
+    med = statistics.median(pos) if pos else 1.0
+    if med <= 0:
+        med = 1.0
+    return [1.0 / (1.0 + (d / med)) for d in distances]
+
+
+def _weighted_pct(values, weights, q):
+    """Distance-weighted percentile. Reduces to pct() when all weights are equal."""
+    if not values:
+        return 0.0
+    pairs = sorted(zip(values, weights), key=lambda vw: vw[0])
+    xs = [v for v, _ in pairs]
+    ws = [w for _, w in pairs]
+    n = len(xs)
+    if n == 1:
+        return xs[0]
+    total = sum(ws)
+    if total <= 0:
+        return pct(values, q)
+    # Weighted plotting positions that generalize pct()'s (n-1)*q convention:
+    # position(i) = (cumulative weight strictly before i) + (w_i - 1)/... -> use the
+    # cumulative *interior* weight so equal weights give exactly i/(n-1).
+    # p_i = (C_i - w_i) / (total - w_last_avg) is fragile; instead place each point at
+    # the cumulative weight of the *preceding* points, scaled to [0, 1].
+    cum, pre = [], 0.0
+    for w in ws:
+        cum.append(pre)
+        pre += w
+    span = total - ws[-1]  # weight mass strictly before the last point
+    if span <= 0:
+        return xs[-1]
+    positions = [c / span for c in cum]  # positions[0]=0, positions[-1]=1
+    if q <= positions[0]:
+        return xs[0]
+    if q >= positions[-1]:
+        return xs[-1]
+    for i in range(1, n):
+        if q <= positions[i]:
+            lo, hi = positions[i - 1], positions[i]
+            frac = 0.0 if hi == lo else (q - lo) / (hi - lo)
+            return xs[i - 1] + frac * (xs[i] - xs[i - 1])
+    return xs[-1]
+
+
+def _match_label(distances):
+    """One-word confidence from neighbor-distance spread (coefficient of variation)."""
+    if len(distances) < 2:
+        return "tight"
+    m = statistics.mean(distances)
+    if m <= 0:
+        return "tight"
+    cv = statistics.pstdev(distances) / m
+    if cv < 0.35:
+        return "tight"
+    if cv < 0.75:
+        return "moderate"
+    return "loose"
+
+
+def _knn_forecast(sessions, target):
+    """Core model. Returns (neighbors, weights, ncosts, ndurs, k, match_label).
+
+    `target` supplies feature values; any missing feature falls back to the pool mean.
+    """
+    feats = _forecast_features()
+    means = {f: statistics.mean(s[f] for s in sessions) for f in feats}
+    # Standardize in scaled space so log-features and linear-features are comparable.
+    scaled = {f: [_scale(s[f], f) for s in sessions] for f in feats}
+    stds = {f: (statistics.pstdev(scaled[f]) or 1.0) for f in feats}
+    tgt = {f: _scale(target.get(f, means[f]), f) for f in feats}
+
+    def dist(s):
+        return math.sqrt(sum(((_scale(s[f], f) - tgt[f]) / stds[f]) ** 2 for f in feats))
+
+    k = _adaptive_k(len(sessions))
+    ranked = sorted(sessions, key=dist)[:k]
+    dists = [dist(s) for s in ranked]
+    weights = _neighbor_weights(dists)
+    ncosts = [s["cost"] for s in ranked]
+    ndurs = [s["duration_min"] for s in ranked if s["duration_min"] is not None]
+    return ranked, weights, ncosts, ndurs, k, _match_label(dists)
+
+
 def cmd_forecast(args):
     pool = _dedup_sessions(load(args.path) + load(getattr(args, "runs", "./runs")))
     accurate = [s for s in pool if s.get("accurate")]
@@ -344,32 +464,31 @@ def cmd_forecast(args):
     if len(sessions) < 5:
         print("Need at least ~5 historical sessions to calibrate a forecast.")
         return
-    # Feature vector: [files_touched, tool_calls, output_tokens, assistant_turns]
-    feats = ["files_touched", "tool_calls", "output", "assistant_turns"]
-    means = {f: statistics.mean(s[f] for s in sessions) for f in feats}
-    stds  = {f: (statistics.pstdev(s[f] for s in sessions) or 1.0) for f in feats}
-
-    target = {
-        "files_touched": args.files if args.files is not None else means["files_touched"],
-        "tool_calls":    args.tools if args.tools is not None else means["tool_calls"],
-        "output":        args.output if args.output is not None else means["output"],
-        "assistant_turns": means["assistant_turns"],
-    }
-
-    def dist(s):
-        return math.sqrt(sum(((s[f] - target[f]) / stds[f]) ** 2 for f in feats))
-
-    k = max(5, len(sessions) // 4)
-    neighbors = sorted(sessions, key=dist)[:k]
-    ncosts = [s["cost"] for s in neighbors]
-    ndurs  = [s["duration_min"] for s in neighbors if s["duration_min"] is not None]
+    # Distance-weighted kNN over log-scaled features incl. cache_read (the cost
+    # driver). target supplies what the user passed; the rest falls back to means.
+    # See _knn_forecast + the design spec.
+    target = {}
+    if args.files is not None:
+        target["files_touched"] = args.files
+    if args.tools is not None:
+        target["tool_calls"] = args.tools
+    if args.output is not None:
+        target["output"] = args.output
+    neighbors, weights, ncosts, ndurs, k, match = _knn_forecast(sessions, target)
+    means = {f: statistics.mean(s[f] for s in sessions) for f in _forecast_features()}
+    # Resolve the displayed target profile (mean fallback) for the header line.
+    target = {f: target.get(f, means[f]) for f in _forecast_features()}
+    # Weights aligned to ncosts (all neighbors) and to ndurs (neighbors w/ duration).
+    cweights = list(weights)
+    dweights = [w for s, w in zip(neighbors, weights) if s["duration_min"] is not None]
 
     print("=" * 68)
     print("TokenCast - task estimate (calibrated on YOUR history, not a guess)")
     print("=" * 68)
     print(f"Task profile: ~{target['files_touched']:.0f} files, "
           f"~{target['tool_calls']:.0f} tool calls")
-    print(f"Matched against {k} most similar past tasks (of {len(sessions)}).")
+    print(f"Matched against {k} most similar past tasks (of {len(sessions)}). "
+          f"Neighbor fit: {match}.")
     if accurate_basis:
         print(f"Calibrated on {len(sessions)} accurate harness runs (real token counts).")
     else:
@@ -377,9 +496,13 @@ def cmd_forecast(args):
         print("Accumulate accurate runs (tokencast-optimize run/auto) to calibrate.")
     print()
     print("Per task:")
-    print(f"  Cost   p50 {money(pct(ncosts,.5)):>9}   p90 {money(pct(ncosts,.9)):>9}   p95 {money(pct(ncosts,.95)):>9}")
+    print(f"  Cost   p50 {money(_weighted_pct(ncosts,cweights,.5)):>9}   "
+          f"p90 {money(_weighted_pct(ncosts,cweights,.9)):>9}   "
+          f"p95 {money(_weighted_pct(ncosts,cweights,.95)):>9}")
     if ndurs:
-        print(f"  Time   p50 {_mins(pct(ndurs,.5)):>9}   p90 {_mins(pct(ndurs,.9)):>9}   p95 {_mins(pct(ndurs,.95)):>9}")
+        print(f"  Time   p50 {_mins(_weighted_pct(ndurs,dweights,.5)):>9}   "
+              f"p90 {_mins(_weighted_pct(ndurs,dweights,.9)):>9}   "
+              f"p95 {_mins(_weighted_pct(ndurs,dweights,.95)):>9}")
         print("         (wall-clock incl. think/idle time -- a rough timeline proxy)")
     print()
     print("  -> Put the p90 in the estimate, not the p50. The same task does not cost")
@@ -392,10 +515,10 @@ def cmd_forecast(args):
         TRIALS = 5000
         totals_c, totals_t = [], []
         for _ in range(TRIALS):
-            c = sum(random.choice(ncosts) for _ in range(args.count))
+            c = sum(random.choices(ncosts, weights=cweights, k=args.count))
             totals_c.append(c)
             if ndurs:
-                totals_t.append(sum(random.choice(ndurs) for _ in range(args.count)))
+                totals_t.append(sum(random.choices(ndurs, weights=dweights, k=args.count)))
         print()
         print(f"Sprint / project of {args.count} similar tasks (Monte Carlo, {TRIALS} trials):")
         print(f"  Budget  p50 {money(pct(totals_c,.5)):>10}   p90 {money(pct(totals_c,.9)):>10}")
