@@ -141,11 +141,47 @@ python tokencast.py report --refresh-prices
 The feed is community-maintained, not official — which is itself part of the argument: even *prices*
 should be a queryable endpoint the labs publish.
 
-## Extending it
+## Extending it (multi-agent)
 
-The parser targets Claude Code today. Any agent that logs per-message token usage
-(model + input/output/cache tokens) can be supported by adding a reader that emits the same
-session summary shape. PRs welcome in spirit; this is a sketch meant to be forked.
+The forecast/report layer is **agent-agnostic** — it consumes a list of per-session summaries and
+does the percentile/kNN math on them. Only the *reader* (the parser) differs per tool. Readers live
+in a small registry (`READERS` in `tokencast.py`); a reader maps one log file to zero-or-more of the
+same summary dicts the Claude Code parser produces. Add a tool by registering a reader; nothing else
+changes.
+
+Pick a reader with `--format` on `forecast`/`report` (default `auto`, which detects Claude Code and
+falls back gracefully — a directory can even mix tools):
+
+```bash
+python tokencast.py forecast ./logs --format auto         # detect per file (default)
+python tokencast.py forecast ./logs --format claude-code  # today's Claude Code JSONL
+python tokencast.py forecast ./logs --format generic      # the portable schema below
+```
+
+**The `generic` schema** is the documented minimal shape any agent that logs per-message token
+usage can emit — one JSON object per line (JSONL), one per assistant message:
+
+```json
+{"timestamp": "2026-01-01T00:00:00Z",
+ "model": "claude-sonnet-4-6",
+ "usage": {"input_tokens": 1234, "output_tokens": 567,
+           "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+ "tools": ["Edit", "Bash"],
+ "files": ["src/a.py"]}
+```
+
+Only `model` + `usage.{input_tokens,output_tokens}` are required; cache fields default to 0,
+`tools`/`files` are optional feature signals. Cost uses the same model-family pricing as Claude Code
+(a `claude-*` id prices correctly; an unknown id falls back to Sonnet, flagged). The input-token
+undercount honesty carries over: placeholder `input_tokens<=1` with real output still counts as a
+suspect entry, so a generic-log forecast is a **floor** unless the run was harness-measured (set
+`"tokencast_accurate": true` on a line to mark it accurate).
+
+Native readers for Cursor, Copilot/`gh`, Codex, and Aider are **future work** that slots into the
+same registry — write the tool's `read` + `sniff` and register them; or pre-process its logs into
+the generic JSONL above. The browser (`tokencast.html`) stays Claude-Code-focused for now; multi-
+format in the browser is future work. PRs welcome in spirit; this is a sketch meant to be forked.
+See `docs/superpowers/specs/2026-06-06-multi-agent-readers-design.md`.
 
 ## Budgets (optional)
 

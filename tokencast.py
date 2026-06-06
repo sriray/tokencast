@@ -352,6 +352,175 @@ def load_segmented(root, gap_min=30, split_on_user=False):
 
 
 # --------------------------------------------------------------------------------------
+# Multi-agent readers (ROADMAP #4): a reader maps ONE log file to a list of the SAME
+# session-summary dicts reduce_entries produces. The forecast/report/budget layer is
+# agent-agnostic; only the reader differs. New tools (Cursor, Copilot/gh, Codex, Aider)
+# slot into READERS without touching anything else.
+# See docs/superpowers/specs/2026-06-06-multi-agent-readers-design.md.
+# --------------------------------------------------------------------------------------
+DEFAULT_FORMAT = "claude-code"
+
+
+def _read_claude_code(path):
+    """claude-code reader == today's parser, wrapped to the list contract (0 or 1 summary)."""
+    return [parse_session(path)]
+
+
+def _sniff_claude_code(entries):
+    """Confidence that these first-lines look like a Claude Code transcript envelope."""
+    if not entries:
+        return 0.0
+    hits = 0
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        msg = e.get("message")
+        if e.get("type") in ("user", "assistant") and isinstance(msg, dict):
+            hits += 1
+        elif isinstance(msg, dict) and msg.get("role") in ("user", "assistant"):
+            hits += 1
+    return hits / len(entries)
+
+
+def _read_generic(path):
+    """Reader for the documented minimal generic schema (README 'Extending it').
+
+    One JSON object per line, one per assistant message:
+      {"timestamp": ..., "model": ..., "usage": {input_tokens, output_tokens,
+       cache_creation_input_tokens?, cache_read_input_tokens?},
+       "tools": [...]?, "files": [...]?}
+    Reduces to the same session-summary contract; cost via the shared entry_cost/price_for
+    so a claude-* id prices correctly and an unknown id falls back to Sonnet (flagged).
+    Never raises: returns [] on a file that isn't this shape.
+    """
+    try:
+        raw = _read_entries(path)
+    except Exception:
+        return []
+    base = os.path.splitext(os.path.basename(path))[0]
+    project = os.path.basename(os.path.dirname(path))
+    s = _new_summary(base, project)
+    saw_msg = False
+    for e in raw:
+        if not isinstance(e, dict):
+            continue
+        if e.get("tokencast_accurate") is True:
+            s["accurate"] = True
+        usage = e.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        # A generic line must carry token usage to be a message; otherwise skip it.
+        if not any(k in usage for k in ("input_tokens", "output_tokens",
+                                        "cache_read_input_tokens",
+                                        "cache_creation_input_tokens")):
+            continue
+        saw_msg = True
+        model = e.get("model")
+        ts = e.get("timestamp")
+        if ts:
+            s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
+            s["ts_last"] = max(s["ts_last"], ts) if s["ts_last"] else ts
+        s["assistant_turns"] += 1
+        s["input"] += usage.get("input_tokens", 0) or 0
+        s["output"] += usage.get("output_tokens", 0) or 0
+        s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
+        s["cache_read"] += usage.get("cache_read_input_tokens", 0) or 0
+        if model:
+            s["models"].add(model)
+        s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+            else entry_cost(usage, model)
+        # Same input-token undercount honesty as Claude Code: a placeholder input_tokens
+        # alongside real output counts as a suspect entry.
+        if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+            s["undercount_hits"] += 1
+        tools = e.get("tools")
+        if isinstance(tools, list):
+            s["tool_calls"] += len(tools)
+        # Files touched: the explicit per-message "files" list is the signal (a tool name
+        # alone can't identify which file, so we don't synthesize one).
+        files = e.get("files")
+        if isinstance(files, list):
+            for fp in files:
+                if fp:
+                    s["files"].add(fp)
+    if not saw_msg:
+        return []
+    s["files_touched"] = len(s["files"])
+    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    return [s]
+
+
+def _sniff_generic(entries):
+    """Confidence that these first-lines are flat generic-schema messages (model + usage,
+    no Claude Code 'message' envelope)."""
+    if not entries:
+        return 0.0
+    hits = 0
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        if "message" in e:  # that's the Claude Code envelope, not generic
+            continue
+        if isinstance(e.get("usage"), dict) and ("model" in e):
+            hits += 1
+    return hits / len(entries)
+
+
+# format name -> (reader, sniffer). Add a tool here to support it; nothing else changes.
+READERS = {
+    "claude-code": (_read_claude_code, _sniff_claude_code),
+    "generic": (_read_generic, _sniff_generic),
+}
+
+
+def _sniff_format(path, n=8):
+    """Pick the best-scoring reader for one file; default to claude-code on a tie/low score."""
+    try:
+        entries = _read_entries(path)[:n]
+    except Exception:
+        return DEFAULT_FORMAT
+    best, best_score = DEFAULT_FORMAT, 0.0
+    for name, (_read, sniff) in READERS.items():
+        try:
+            score = sniff(entries)
+        except Exception:
+            score = 0.0
+        if score > best_score:
+            best, best_score = name, score
+    return best if best_score >= 0.5 else DEFAULT_FORMAT
+
+
+def read_file(path, fmt="auto"):
+    """Read ONE log file into session summaries using the chosen (or auto-detected) reader.
+
+    Never raises on a foreign/empty file: returns []. The loader filters assistant_turns==0.
+    """
+    name = _sniff_format(path) if fmt == "auto" else fmt
+    reader = READERS.get(name)
+    if reader is None:
+        return []
+    try:
+        return reader[0](path) or []
+    except Exception as ex:
+        print(f"  ! skipped {path}: {ex}", file=sys.stderr)
+        return []
+
+
+def load_with_format(root, fmt="auto"):
+    """Like load(), but route each file through the multi-agent reader registry (ROADMAP #4).
+
+    fmt='auto' sniffs each file; an explicit format selects one reader for every file.
+    With fmt='claude-code' this is equivalent to load(root).
+    """
+    sessions = []
+    for p in _glob_jsonl(root):
+        for sess in read_file(p, fmt):
+            if isinstance(sess, dict) and sess.get("assistant_turns", 0) > 0:
+                sessions.append(sess)
+    return sessions
+
+
+# --------------------------------------------------------------------------------------
 # Stats helpers
 # --------------------------------------------------------------------------------------
 def pct(values, q):
@@ -374,11 +543,14 @@ def money(x):
 # --------------------------------------------------------------------------------------
 def cmd_report(args):
     segment = getattr(args, "segment", False)
+    fmt = getattr(args, "format", "auto")
     if segment:
         sessions = load_segmented(args.path, getattr(args, "gap_min", 30),
                                   getattr(args, "split_on_user", False))
+    elif fmt and fmt != "auto":
+        sessions = load_with_format(args.path, fmt)
     else:
-        sessions = load(args.path)
+        sessions = load(args.path)  # default/auto path == today's claude-code behavior
     if not sessions:
         print(f"No usable sessions found under {args.path}. Try `demo` first.")
         return
@@ -587,13 +759,17 @@ def _knn_forecast(sessions, target):
 
 def cmd_forecast(args):
     segment = getattr(args, "segment", False)
+    fmt = getattr(args, "format", "auto")
+    runs = getattr(args, "runs", "./runs")
     if segment:
         gap = getattr(args, "gap_min", 30)
         sou = getattr(args, "split_on_user", False)
-        loaded = load_segmented(args.path, gap, sou) + \
-            load_segmented(getattr(args, "runs", "./runs"), gap, sou)
+        loaded = load_segmented(args.path, gap, sou) + load_segmented(runs, gap, sou)
+    elif fmt and fmt != "auto":
+        # Format-specific history; runs are always TokenCast-written claude-code JSONL.
+        loaded = load_with_format(args.path, fmt) + load(runs)
     else:
-        loaded = load(args.path) + load(getattr(args, "runs", "./runs"))
+        loaded = load(args.path) + load(runs)  # default/auto == today's behavior
     pool = _dedup_sessions(loaded)
     accurate = [s for s in pool if s.get("accurate")]
     sessions, accurate_basis = (accurate, True) if len(accurate) >= 5 else (pool, False)
@@ -781,6 +957,8 @@ def main():
                    help="idle-gap threshold in minutes for --segment (default 30; 0 disables the gap rule)")
     r.add_argument("--split-on-user", action="store_true",
                    help="with --segment, also split at fresh user turns between tasks")
+    r.add_argument("--format", choices=sorted(READERS) + ["auto"], default="auto",
+                   help="log format reader (default auto: detect Claude Code, else fall back)")
     r.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
     r.set_defaults(func=cmd_report)
 
@@ -799,6 +977,8 @@ def main():
                    help="idle-gap threshold in minutes for --segment (default 30; 0 disables the gap rule)")
     f.add_argument("--split-on-user", action="store_true",
                    help="with --segment, also split at fresh user turns between tasks")
+    f.add_argument("--format", choices=sorted(READERS) + ["auto"], default="auto",
+                   help="log format reader for history (default auto; runs/ stay claude-code)")
     f.add_argument("--refresh-prices", action="store_true", help="pull current prices from the live cost map")
     f.set_defaults(func=cmd_forecast)
 
