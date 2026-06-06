@@ -88,6 +88,11 @@ says so loudly. This is currently framed as a feature (it proves the essay's poi
 has the accurate number). But for the tool to be genuinely useful, the #1 job is to get an accurate
 token source. See ROADMAP.md.
 
+**Partially addressed:** the optimizer tier measures runs accurately and stamps a
+`tokencast_accurate` marker into its JSONL; `forecast` (CLI + HTML) now prefers those accurate runs
+(≥5 → calibrated, floor caveat dropped) over the undercounted history, deduping the pool and
+labeling the basis. Pure Claude-Code-log forecasts remain a floor until a provider token API lands.
+
 ## Evidence base (verified)
 
 - arXiv 2604.22750, "How Do AI Agents Spend Your Money?" (Microsoft Research + Stanford Digital

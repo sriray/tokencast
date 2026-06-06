@@ -55,6 +55,12 @@ promote (+ optional `--decompose`) under one confirmation, and a `/tokencast-opt
 skill drives the whole machine conversationally — code for the deterministic parts (forecast,
 scoring, ranking), the LLM for judgment (eval-set drafting, axis choice, interpretation).
 
+**Accuracy bridge — done (light tier).** The harness stamps a `tokencast_accurate` marker into the
+JSONL it writes; `forecast` now pools history + `./runs`, prefers the accurate runs when ≥5 exist
+(calibrating on real token counts and dropping the floor caveat), and labels which basis it used —
+in both `tokencast.py` and `tokencast.html`. The remaining accuracy path is the provider Usage &
+Cost API for pure Claude-Code-log forecasts.
+
 ## 2. Better task segmentation
 A session isn't always one task. Explore segmenting by user-turn boundaries, long idle gaps, or
 git-commit snapshots in the transcript, so "a task" maps to a unit a planner actually estimates.
