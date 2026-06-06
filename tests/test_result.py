@@ -55,6 +55,7 @@ def test_to_jsonl_bridges_to_tokencast(tmp_path):
     assert sess["assistant_turns"] == 2
     assert sess["files_touched"] == 2
     assert sess["duration_min"] == 0.7  # 42000 ms = 42 s = 0.7 min
+    assert sess["accurate"] is True
 
 
 def test_to_jsonl_handles_zero_turns(tmp_path):
@@ -119,3 +120,14 @@ def test_to_jsonl_multi_turn_settles_on_final_turn(tmp_path):
     assert sess["output"] == 800
     assert sess["cache_write"] == 1500
     assert sess["files_touched"] == 1
+
+
+def test_to_jsonl_stamps_accuracy_marker(tmp_path):
+    import json as _json
+    rr = RunResult.from_raw(RAW, task_id="t1", config_id="baseline")
+    path = tmp_path / "t1-baseline.jsonl"
+    rr.to_jsonl(str(path))
+    with open(path, encoding="utf-8") as fh:
+        lines = [_json.loads(ln) for ln in fh if ln.strip()]
+    assert lines, "expected at least one emitted line"
+    assert all(ln.get("tokencast_accurate") is True for ln in lines)

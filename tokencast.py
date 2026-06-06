@@ -152,7 +152,7 @@ def parse_session(path):
         "project": os.path.basename(os.path.dirname(path)),
         "cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
         "assistant_turns": 0, "tool_calls": 0, "files": set(),
-        "models": set(), "undercount_hits": 0, "ts_first": None, "ts_last": None,
+        "models": set(), "undercount_hits": 0, "accurate": False, "ts_first": None, "ts_last": None,
     }
     with open(path, "r", errors="ignore") as fh:
         for line in fh:
@@ -163,6 +163,8 @@ def parse_session(path):
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if e.get("tokencast_accurate") is True:
+                s["accurate"] = True
             ts = e.get("timestamp")
             if ts:
                 s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
@@ -324,8 +326,21 @@ def _mins(x):
     return f"{x:.0f} min"
 
 
+def _dedup_sessions(sessions):
+    """Keep the first session per (project, session) key, order-preserving."""
+    seen, out = set(), []
+    for s in sessions:
+        key = (s["project"], s["session"])
+        if key not in seen:
+            seen.add(key)
+            out.append(s)
+    return out
+
+
 def cmd_forecast(args):
-    sessions = load(args.path)
+    pool = _dedup_sessions(load(args.path) + load(getattr(args, "runs", "./runs")))
+    accurate = [s for s in pool if s.get("accurate")]
+    sessions, accurate_basis = (accurate, True) if len(accurate) >= 5 else (pool, False)
     if len(sessions) < 5:
         print("Need at least ~5 historical sessions to calibrate a forecast.")
         return
@@ -355,6 +370,11 @@ def cmd_forecast(args):
     print(f"Task profile: ~{target['files_touched']:.0f} files, "
           f"~{target['tool_calls']:.0f} tool calls")
     print(f"Matched against {k} most similar past tasks (of {len(sessions)}).")
+    if accurate_basis:
+        print(f"Calibrated on {len(sessions)} accurate harness runs (real token counts).")
+    else:
+        print("Built on Claude Code logs that undercount input tokens -- this is a FLOOR.")
+        print("Accumulate accurate runs (tokencast-optimize run/auto) to calibrate.")
     print()
     print("Per task:")
     print(f"  Cost   p50 {money(pct(ncosts,.5)):>9}   p90 {money(pct(ncosts,.9)):>9}   p95 {money(pct(ncosts,.95)):>9}")
@@ -489,6 +509,8 @@ def main():
 
     f = sub.add_parser("forecast", help="estimate a new task's cost from your history")
     f.add_argument("path", nargs="?", default=os.path.expanduser("~/.claude/projects"))
+    f.add_argument("--runs", default="./runs",
+                   help="accurate TokenCast run logs to prefer over the floor history")
     f.add_argument("--files", type=int, default=None, help="expected # files the task will touch")
     f.add_argument("--tools", type=int, default=None, help="expected # tool calls")
     f.add_argument("--output", type=int, default=None, help="expected output tokens (optional)")

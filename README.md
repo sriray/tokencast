@@ -80,6 +80,12 @@ streaming placeholder that's 0 or 1 in ~75% of entries, while the real volume li
 cache fields (which *are* reliable). So TokenCast's absolute numbers are a **floor**, and
 the tool flags this loudly in its output.
 
+Once you run tasks through the optimizer tier (`tokencast-optimize run`/`auto`), those runs are
+measured accurately and written to `./runs` with an accuracy marker. `forecast` then **prefers
+them**: with ≥5 accurate runs it calibrates on real token counts and drops the floor caveat (point
+it at a different dir with `--runs DIR`; the default `./runs` is relative to your current
+directory). Until then it's still a floor — and says so.
+
 That gap is the thesis. The accurate number exists; only the provider has it. A vendor-neutral
 "FinOps for agentic engineering" layer needs the labs to expose per-step token telemetry — or
 the labs should just ship the cost preview themselves.

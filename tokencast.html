@@ -173,10 +173,11 @@ function entryCost(u,model,P){
 function parseSession(name, text, project, P){
   const s={session:name, project:project||"(root)", cost:0, output:0,
            assistant_turns:0, tool_calls:0, files:new Set(), models:new Set(),
-           undercount:0, day:null, tsFirst:null, tsLast:null};
+           undercount:0, accurate:false, day:null, tsFirst:null, tsLast:null};
   for(const line of text.split("\n")){
     const t=line.trim(); if(!t) continue;
     let e; try{ e=JSON.parse(t);}catch(_){ continue; }
+    if(e.tokencast_accurate===true) s.accurate=true;
     if(e.timestamp){
       const ms=Date.parse(e.timestamp);
       if(!isNaN(ms)){ if(s.tsFirst===null||ms<s.tsFirst)s.tsFirst=ms; if(s.tsLast===null||ms>s.tsLast)s.tsLast=ms; }
@@ -317,19 +318,22 @@ function updateCap(){
 }
 
 function forecast(){
-  if(SESSIONS.length<5){ document.getElementById('forecastOut').innerHTML=
+  const accurate=SESSIONS.filter(s=>s.accurate);
+  const accurateBasis=accurate.length>=5;
+  const basis=accurateBasis?accurate:SESSIONS;
+  if(basis.length<5){ document.getElementById('forecastOut').innerHTML=
     `<span class="muted">Need ~5+ tasks to calibrate.</span>`; return; }
   const feats=["files_touched","tool_calls","output","assistant_turns"];
   const stds={}, means={};
-  feats.forEach(f=>{ const a=SESSIONS.map(s=>s[f]); means[f]=mean(a); stds[f]=pstd(a); });
+  feats.forEach(f=>{ const a=basis.map(s=>s[f]); means[f]=mean(a); stds[f]=pstd(a); });
   const target={
     files_touched:parseFloat(document.getElementById('f_files').value)||means.files_touched,
     tool_calls:parseFloat(document.getElementById('f_tools').value)||means.tool_calls,
     output:means.output, assistant_turns:means.assistant_turns,
   };
   const dist=s=>Math.sqrt(feats.reduce((a,f)=>a+((s[f]-target[f])/stds[f])**2,0));
-  const k=Math.max(5,Math.floor(SESSIONS.length/4));
-  const nearObj=[...SESSIONS].sort((a,b)=>dist(a)-dist(b)).slice(0,k);
+  const k=Math.max(5,Math.floor(basis.length/4));
+  const nearObj=[...basis].sort((a,b)=>dist(a)-dist(b)).slice(0,k);
   const near=nearObj.map(s=>s.cost);
   const durs=nearObj.map(s=>s.duration_min).filter(x=>x!=null);
   const count=Math.max(1,parseInt(document.getElementById('f_count').value)||1);
@@ -349,6 +353,9 @@ function forecast(){
         <span class="muted" style="font-size:12px;">(sequential; parallelize to compress)</span><br>`:"");
   }
   html += `<span class="muted">Put the p90 in your estimate. Matched on your ${k} most similar past tasks.</span>`;
+  html += accurateBasis
+    ? `<br><span class="muted" style="font-size:12px;">Calibrated on ${basis.length} accurate runs (real token counts).</span>`
+    : `<br><span class="muted" style="font-size:12px;">Floor: built on logs that undercount input tokens — accumulate accurate runs to calibrate.</span>`;
   document.getElementById('forecastOut').innerHTML=html;
 }
 

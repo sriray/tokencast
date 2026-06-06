@@ -103,6 +103,8 @@ class RunResult:
                                       "model": turn.get("model", model),
                                       "content": turn.get("content", []),
                                       "usage": dict(settle) if is_last else dict(zero)}})
+        for ln in lines:
+            ln["tokencast_accurate"] = True
         with open(path, "w") as fh:
             for ln in lines:
                 fh.write(json.dumps(ln) + "\n")
