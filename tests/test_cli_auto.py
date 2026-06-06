@@ -87,6 +87,18 @@ def test_cmd_auto_preflight_counts_decomposition_strategies(tmp_path, monkeypatc
     assert "+ 3 decomposition strategies/task" in err    # monolithic + 2 proposed
 
 
+def test_cmd_auto_preflight_pluralizes_single_strategy(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "run_auto",
+                        lambda *a, **k: {"winner_id": "baseline", "optimize": _result(),
+                                         "decompose": None})
+    monkeypatch.setattr(cli, "estimate_cost", lambda h: (10, 0.01))
+    # decompose_generate=0 -> n_decomp = 1 -> singular "strategy", not "strategies"
+    cli.cmd_auto(_args(tmp_path, generate=0, decompose=True, decompose_generate=0))
+    err = capsys.readouterr().err
+    assert "+ 1 decomposition strategy/task" in err
+    assert "strategies/task" not in err
+
+
 def test_cmd_auto_missing_evalset(tmp_path):
     with pytest.raises(SystemExit):
         cli.cmd_auto(_args(tmp_path, evalset=str(tmp_path / "nope.yaml")))
