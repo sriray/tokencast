@@ -17,8 +17,13 @@ TokenCast is the one-afternoon proof of that missing half.
 
 ## Current state
 
-- `tokencast.py` — Python 3.8+, stdlib only, ~300 lines. Subcommands: `forecast` (primary),
-  `report`, `demo`. Live-pricing refresh via `--refresh-prices`. Optional `--segment`
+- `tokencast.py` — Python 3.8+, stdlib only. Subcommands: `forecast` (primary),
+  `report`, `estimate`, `demo`, `budget`. Live-pricing refresh via `--refresh-prices`.
+  `estimate <plan.md>` (ROADMAP #5) annotates each ticket line of a plan markdown file with a
+  p90 cost+time + a sprint total, reusing the `forecast` kNN + accuracy bridge (`parse_plan` +
+  `cmd_estimate`; see `docs/superpowers/specs/2026-06-06-estimate-and-packaging-design.md`).
+  Installable as a `tokencast` console command (`pipx install tokencast` / `uvx tokencast`).
+  Optional `--segment`
   (`--gap-min N`, default 30; `--split-on-user`) on `forecast`/`report` splits a session
   transcript into task-sized units at long idle gaps (ROADMAP #2) — opt-in, backward-compatible,
   pure (`segment_entries`/`parse_session_segments`/`load_segmented`, atop a shared `reduce_entries`).

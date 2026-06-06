@@ -47,9 +47,26 @@ python tokencast.py forecast ./sample_logs --files 8 --tools 30
 # 3. Roll a sprint of 12 similar tasks into a budget + timeline
 python tokencast.py forecast ./sample_logs --files 8 --tools 30 --count 12
 
-# 4. (secondary) Attribute past spend, and see what a cap would clip
+# 4. Annotate a plan/ticket file with a p90 cost+time per line + a sprint total
+python tokencast.py estimate plan.md ./sample_logs --files 8 --tools 30
+
+# 5. (secondary) Attribute past spend, and see what a cap would clip
 python tokencast.py report ./sample_logs --cap 5
 ```
+
+### Install (so `tokencast` is a command)
+
+The light tier is pure stdlib, so you can just run `python tokencast.py …`. To get a
+`tokencast` command on your PATH (no dependencies installed):
+
+```bash
+pipx install tokencast      # or, ephemerally:
+uvx tokencast forecast --files 8 --tools 30
+```
+
+Both expose the light tier (`forecast`/`report`/`estimate`/`demo`/`budget`). The heavy
+optimizer tier ships as the separate `tokencast-optimize` command (`pip install
+'tokencast[optimize]'`).
 
 Point it at your real Claude Code logs by passing `~/.claude/projects` (the default):
 
@@ -68,6 +85,13 @@ python tokencast.py forecast --files 12 --tools 40
   can tell a calibrated estimate from a thin-history guess. Pass `--count N` to roll up a
   sprint/project total via Monte Carlo. This is the number you put in your estimate —
   calibrated on your history, not a human guess.
+- **estimate** — the "cost line in the plan." Takes a plan/ticket markdown file and annotates
+  each ticket (any `-`/`*`/`+` bullet, GitHub `- [ ]` checkbox, or `1.`/`2)` ordered-list item;
+  headings, blanks, and prose are ignored) with its **p90 cost + p90 time**, then prints a sprint
+  total (sum of per-ticket p90s plus a Monte-Carlo p50/p90). Uses the same kNN forecaster and the
+  same accurate-vs-floor labeling as `forecast`. A ticket can hint its own size inline, e.g.
+  `- Add OAuth (files=8 tools=30 output=4000)` — those override the global `--files/--tools/--output`
+  for that ticket; otherwise each falls back to your history mean.
 - **report** (secondary) — total spend, per-task distribution (p50/p90/p95/max), breakdown by
   project and model, your most expensive tasks, and an optional `--cap` overlay showing how many
   tasks a hard ceiling would have cut off mid-work. Tools like ccusage already do this well.
