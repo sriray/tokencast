@@ -890,9 +890,12 @@ def _parse_size_hint(text):
         if key not in sizes:
             return text, None, None, None
         try:
-            sizes[key] = int(val.strip())
+            n = int(val.strip())
         except ValueError:
             return text, None, None, None
+        if n < 0:
+            return text, None, None, None  # negatives aren't a valid task size; treat as prose
+        sizes[key] = n
     clean = text[: m.start()].rstrip()
     return clean, sizes["files"], sizes["tools"], sizes["output"]
 
@@ -952,7 +955,6 @@ def cmd_estimate(args):
     if len(sessions) < 5:
         print("Need at least ~5 historical sessions to calibrate a forecast.")
         return
-    means = {f: statistics.mean(s[f] for s in sessions) for f in _forecast_features()}
 
     print("=" * 68)
     print("TokenCast - plan estimate (p90 cost + time per ticket)")

@@ -62,6 +62,25 @@ def test_parse_plan_non_hint_parens_left_alone():
     assert (t.files, t.tools, t.output) == (None, None, None)
 
 
+def test_parse_plan_negative_hint_left_as_prose():
+    # A negative size isn't a valid task size; treat the parenthetical as ordinary text.
+    # (Regression: a negative on a log-scaled feature used to crash the forecaster via log1p.)
+    tickets = tokencast.parse_plan("- Bad ticket (tools=-5 output=-1)\n")
+    t = tickets[0]
+    assert t.text == "Bad ticket (tools=-5 output=-1)"
+    assert (t.files, t.tools, t.output) == (None, None, None)
+
+
+def test_estimate_negative_hint_does_not_crash(tmp_path, capsys):
+    hist = tmp_path / "hist"
+    _write_many(str(hist), 12, marked=False)
+    plan = _plan_file(tmp_path, "- Bad ticket (tools=-5)\n- Good ticket (files=3 tools=10)\n")
+    tokencast.cmd_estimate(_args(plan, str(hist), str(tmp_path / "none")))
+    out = capsys.readouterr().out
+    assert "Bad ticket (tools=-5)" in out      # rendered as prose, forecast still produced
+    assert "Good ticket" in out
+
+
 def test_parse_plan_partial_hint():
     tickets = tokencast.parse_plan("- Small tweak (tools=5)\n")
     t = tickets[0]
