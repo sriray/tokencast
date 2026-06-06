@@ -87,8 +87,17 @@ Still open:
 - Per-model curves, and auto re-baseline when a new model id first appears in the logs (cost surface drift).
 
 ## 4. Multi-agent support
-Add readers for other tools (Cursor, Copilot/`gh`, Codex, Aider) that emit the same per-session summary
-shape. The forecast/report layer is agent-agnostic; only the parser differs.
+
+**Status: done (reader registry + generic schema).** The forecast/report layer is agent-agnostic;
+only the parser differs. `tokencast.py` now has a `READERS` registry (`claude-code` == today's
+`parse_session`, plus a portable `generic` JSONL reader), a per-file sniffer, and a `--format
+{auto,claude-code,generic}` flag on `forecast`/`report` (default `auto`: detect Claude Code, fall
+back gracefully; a directory can mix tools). Both readers reduce to the identical session-summary
+shape, so cost/forecast math is untouched and the input-token undercount honesty carries over.
+Default behavior (no `--format`) is byte-for-byte unchanged. Native Cursor/Copilot/Codex/Aider
+readers are future work that slot into the same registry (or pre-process to the generic schema);
+the HTML mirror stays Claude-Code-focused for now. See
+`docs/superpowers/specs/2026-06-06-multi-agent-readers-design.md`.
 
 ## 5. Packaging & distribution
 - `pipx install tokencast` / a single `uvx` entry; publish the repo on GitHub to ship with the essay.
