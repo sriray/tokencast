@@ -1,0 +1,5 @@
+# Ship the standalone browser tool, the license/changelog, and the docs in the sdist.
+# (The importable Python — tokencast.py, budget.py, optimize/ — is included via pyproject.)
+include tokencast.html
+include LICENSE CHANGELOG.md ROADMAP.md
+recursive-include docs *.md
