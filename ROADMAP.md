@@ -73,6 +73,15 @@ unit changes, not the token accuracy (see #1). Git-commit-snapshot segmentation 
 aren't reliably present in the transcript). See `docs/superpowers/specs/2026-06-06-task-segmentation-design.md`.
 
 ## 3. Stronger forecast model
+
+**Status: improved (distance-weighted kNN).** `forecast` now uses distance-weighted percentiles +
+weighted Monte-Carlo (closer past tasks count more, reducing to the old unweighted result when
+distances are equal), log-scaled richer features (adds `cache_read`, the real cost driver), an
+adaptive `k` that's saner on tiny pools, and a one-word neighbor-spread confidence label
+(tight/moderate/loose). kNN stays the explainable baseline; default-on, output shape preserved;
+mirrored in `tokencast.html`. See `docs/superpowers/specs/2026-06-06-forecast-model-design.md`.
+
+Still open:
 - Add task-type features (test-heavy vs. greenfield vs. refactor; novelty vs. boilerplate).
 - Quantile regression or conformal prediction for calibrated intervals (keep kNN as the explainable baseline).
 - Per-model curves, and auto re-baseline when a new model id first appears in the logs (cost surface drift).
