@@ -100,10 +100,20 @@ the HTML mirror stays Claude-Code-focused for now. See
 `docs/superpowers/specs/2026-06-06-multi-agent-readers-design.md`.
 
 ## 5. Packaging & distribution
-- `pipx install tokencast` / a single `uvx` entry; publish the repo on GitHub to ship with the essay.
-- Host `tokencast.html` (folder picker works the same over https; demo button always works).
-- Optional: a `tokencast estimate` mode that takes a plan.md (list of tickets) and annotates each line
-  with a p90 cost+time, then prints the sprint total — the literal "cost line in the plan" idea.
+
+**Status: done (in-repo pieces).** `pyproject.toml` now exposes a `tokencast` console entry (next to
+`tokencast-optimize`), so the light tier is `pipx install`/`uvx`-runnable. And `tokencast estimate
+<plan.md>` reads a plan/ticket markdown file, annotates each ticket with a p90 cost+time (reusing the
+exact forecaster + accuracy bridge; optional inline `(files=.. tools=..)` hints), and prints the
+sprint total — the literal "cost line in the plan." See
+`docs/superpowers/specs/2026-06-06-estimate-and-packaging-design.md`.
+
+Remaining (external, manual — need network/credentials a human holds):
+- Publish to PyPI (`python -m build` + `twine upload`) and verify `pipx install tokencast` / `uvx
+  tokencast forecast …` from a clean machine; bump the `pyproject.toml` version first.
+- Push the repo public on GitHub to ship alongside the essay; tag a release.
+- Host `tokencast.html` over HTTPS (any static host / GitHub Pages); the folder picker works the same
+  over https and the demo button always works.
 
 ## 6. The real ask (north star)
 None of this beats the provider shipping it natively. Frame TokenCast as the existence proof: a
