@@ -11,11 +11,10 @@ you to guess. It reads the session logs your agent already writes to disk, learn
 the one you're planning* have actually cost and taken, and returns a **range** (p50 / p90 / p95)
 for a single task or a whole sprint.
 
-This is a deliberately small provocation, not a product. It's the companion to the essay
-*"Software Just Went COGS."* The point isn't the parser. The point is that a solo
-afternoon gets you a usable forecast off logs that are *known to be wrong* — so imagine
-what Anthropic or OpenAI could ship as a "cost preview" inside plan mode, sitting on
-clean, cross-customer telemetry. They're the only ones who can do it accurately. They should.
+Use it where you scope work. Drop a forecast into a plan or a ticket and you have a cost-and-time
+number to defend before the work is committed, plus a budget and timeline for the whole sprint
+before you size it. Setup is pointing it at the logs your agent already writes; there's nothing to
+instrument, and nothing leaves your machine.
 
 ## Install
 
@@ -36,16 +35,18 @@ pip install 'tokencast[optimize]'
 No install at all? Just double-click **`tokencast.html`** (see below), or run
 `python tokencast.py …` directly from a clone.
 
-## How this differs from existing tools
+## Forecasts, not just reports
 
-Telling you what you *already spent* is a solved, crowded problem — [ccusage](https://ccusage.com/),
-several dashboards, and Anthropic's own [Usage and Cost API](https://platform.claude.com/docs/en/build-with-claude/usage-cost-api)
-all do post-hoc attribution, most of them better than this. TokenCast deliberately does **not**
-try to compete there. It does the **forward-looking** half almost nobody does: turn your history
-into a *pre-flight* estimate of what a task will cost *before* you run it. And that problem is
-genuinely hard — a [Microsoft Research / Stanford study](https://arxiv.org/abs/2604.22750) found the
-same agent on the same task can vary up to **30x**. So treat the forecast as a calibrated bet, not a
-quote, and budget the p90.
+Most cost tools are rear-view: they tell you what you already spent. That's the right answer for a
+finance review and the wrong one when you're scoping next sprint. TokenCast estimates the cost and
+time of a task *before* you run it, using your own history as the calibration set. Pair it with a
+rear-view tool — [ccusage](https://ccusage.com/) or Anthropic's
+[Usage and Cost API](https://platform.claude.com/docs/en/build-with-claude/usage-cost-api) — when
+you want to reconcile a forecast against what actually happened.
+
+Read the forecast as a calibrated bet, not a quote. The same agent on the same task can vary up to
+**30x** ([Microsoft Research / Stanford](https://arxiv.org/abs/2604.22750)), which is why a single
+point estimate misleads and the p90 is the number to budget.
 
 ## Easiest: no install (browser)
 
@@ -147,12 +148,11 @@ python tokencast.py report   ./sample_logs --segment
 The browser version mirrors this: tick **Segment long sessions into tasks** in the forecast panel
 and set the idle-gap minutes.
 
-## The honest part (and the whole argument)
+## Read the absolute numbers as a floor
 
-Claude Code's JSONL logs are **known to undercount input tokens** — `input_tokens` is a
-streaming placeholder that's 0 or 1 in ~75% of entries, while the real volume lives in the
-cache fields (which *are* reliable). So TokenCast's absolute numbers are a **floor**, and
-the tool flags this loudly in its output.
+Claude Code's JSONL logs **undercount input tokens** — `input_tokens` is a streaming placeholder
+that's 0 or 1 in ~75% of entries, while the real volume lives in the cache fields (which *are*
+reliable). So TokenCast's absolute numbers are a **floor**, and the tool flags this in its output.
 
 Once you run tasks through the optimizer tier (`tokencast-optimize run`/`auto`), those runs are
 measured accurately and written to `./runs` with an accuracy marker. `forecast` then **prefers
@@ -160,9 +160,9 @@ them**: with ≥5 accurate runs it calibrates on real token counts and drops the
 it at a different dir with `--runs DIR`; the default `./runs` is relative to your current
 directory). Until then it's still a floor — and says so.
 
-That gap is the thesis. The accurate number exists; only the provider has it. A vendor-neutral
-"FinOps for agentic engineering" layer needs the labs to expose per-step token telemetry — or
-the labs should just ship the cost preview themselves.
+Until then, use the ranges for what they're good at: relative planning. Which tasks are expensive,
+where a budget cap starts cutting off work mid-task, how one sprint compares to the next — all of
+that holds up even when the absolute floor runs low.
 
 ## Pricing (and staying current)
 
@@ -223,7 +223,7 @@ suspect entry, so a generic-log forecast is a **floor** unless the run was harne
 Native readers for Cursor, Copilot/`gh`, Codex, and Aider are **future work** that slots into the
 same registry — write the tool's `read` + `sniff` and register them; or pre-process its logs into
 the generic JSONL above. The browser (`tokencast.html`) stays Claude-Code-focused for now; multi-
-format in the browser is future work. PRs welcome in spirit; this is a sketch meant to be forked.
+format in the browser is future work. Contributions for new readers are welcome.
 See `docs/superpowers/specs/2026-06-06-multi-agent-readers-design.md`.
 
 ## Budgets (optional)
