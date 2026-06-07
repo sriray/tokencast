@@ -5,9 +5,9 @@ name: Deploy tokencast.html to GitHub Pages
 # static deploy is the whole app. We stage it as index.html (so the bare Pages URL
 # serves the tool) and also keep it reachable at /tokencast.html.
 #
-# One-time setup: in the repo, Settings -> Pages -> Build and deployment ->
-# Source: "GitHub Actions". After that this runs automatically on every push to
-# main that touches the HTML (or via the manual "Run workflow" button).
+# The "Configure Pages" step enables Pages (build_type=workflow) itself via
+# enablement: true, so no manual Settings -> Pages step is needed. Runs on every
+# push to main that touches the HTML (or via the manual "Run workflow" button).
 
 on:
   push:
@@ -45,6 +45,10 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Enable Pages (build_type=workflow) from the workflow itself, so the
+          # deploy doesn't depend on Pages already being enabled via the API/UI.
+          enablement: true
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
