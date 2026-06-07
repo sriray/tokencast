@@ -27,3 +27,4 @@ tc_*/
 .DS_Store
 .idea/
 .vscode/
+.gstack/
