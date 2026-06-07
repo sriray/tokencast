@@ -113,9 +113,9 @@
         <h2>Estimate a task (and a sprint)</h2>
         <p class="muted">For your dev estimate and timeline — calibrated on your history, not a guess. (Research shows human-rated difficulty barely predicts token cost.)</p>
         <label>Files it will likely touch</label>
-        <input type="number" id="f_files" value="8">
+        <input type="number" id="f_files" value="8" min="0">
         <label style="margin-top:10px;">Expected tool calls</label>
-        <input type="number" id="f_tools" value="30">
+        <input type="number" id="f_tools" value="30" min="0">
         <label style="margin-top:10px;">Tasks like this in the sprint</label>
         <input type="number" id="f_count" value="1" min="1">
         <label style="margin-top:10px; display:flex; align-items:center; gap:8px; font-weight:normal;">
@@ -277,7 +277,7 @@ function mc(arr,count,trials){ const out=[]; for(let t=0;t<trials;t++){ let s=0;
 const LOG_FEATURES=new Set(["output","tool_calls","cache_read"]);
 function fcFeatures(){ return ["files_touched","tool_calls","output","assistant_turns","cache_read"]; }
 function fcScale(v,f){ v=v||0; return LOG_FEATURES.has(f)?Math.log1p(v):v; }
-function adaptiveK(n){ return Math.min(Math.max(5,Math.floor(n/4)), Math.max(5,Math.floor(3*n/5))); }
+function adaptiveK(n){ return Math.max(5, Math.floor(n/4)); }
 function median(a){ const x=[...a].sort((p,q)=>p-q); if(!x.length) return 0; const m=Math.floor(x.length/2);
   return x.length%2?x[m]:(x[m-1]+x[m])/2; }
 function neighborWeights(d){ const pos=d.filter(x=>x>0); let med=pos.length?median(pos):1; if(med<=0)med=1;

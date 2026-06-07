@@ -9,6 +9,7 @@ command prints a hint and exits.
 """
 import datetime
 import json
+import math
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -70,9 +71,10 @@ class BudgetConfig:
                 raise ValueError(f"{path}: duplicate scope {scope!r}")
             seen_scopes.add(scope)
             amount = b.get("amount")
-            if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount < 0:
+            if (not isinstance(amount, (int, float)) or isinstance(amount, bool)
+                    or not math.isfinite(amount) or amount < 0):
                 raise ValueError(
-                    f"{path}: budget amount must be a non-negative number, got {amount!r}")
+                    f"{path}: budget amount must be a finite non-negative number, got {amount!r}")
             budgets.append(BudgetEntry(scope=scope, amount=float(amount)))
         return cls(period=period, period_start=period_start, budgets=budgets)
 

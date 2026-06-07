@@ -27,6 +27,10 @@ class RunResult:
     # Files TOUCHED (incl. reads): mirrors tokencast.py's read-inclusive FILE_TOOLS set.
     files_changed: List[str] = field(default_factory=list)
     accurate: bool = True
+    # The SDK's authoritative billed cost (ResultMessage.total_cost_usd). `cost_usd` is
+    # recomputed from accurate token counts at TokenCast list prices; this is the provider's
+    # own number, kept for reconciliation (ROADMAP #1's ~±15%-of-provider-cost check).
+    provider_cost_usd: float = 0.0
 
     @classmethod
     def from_raw(cls, raw, task_id, config_id):
@@ -53,6 +57,7 @@ class RunResult:
             final_output=result.get("result_text", "") or "",
             files_changed=files,
             accurate=True,
+            provider_cost_usd=float(result.get("total_cost_usd", 0.0) or 0.0),
         )
 
     def _settlement_usage(self):

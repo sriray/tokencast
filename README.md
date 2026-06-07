@@ -1,7 +1,7 @@
 # TokenCast
 
 Predict what an agentic coding task will **cost** and how **long** it takes — so you can build
-software estimates and plan timelines in the metered era. ~300 lines, no dependencies, Python 3.8+
+software estimates and plan timelines in the metered era. One file, no dependencies, Python 3.8+
 (or open the no-install browser version).
 
 Estimation used to be a human sizing a ticket. That no longer predicts the bill: a
@@ -97,7 +97,7 @@ python tokencast.py forecast --files 12 --tools 40
 
 ## What it does
 
-- **forecast** (the point) — finds the *k* most similar past tasks by feature vector
+- **forecast** (the primary command) — finds the *k* most similar past tasks by feature vector
   (files touched, tool calls, output tokens, turns, and cache-read tokens — the real cost
   driver) and returns a **cost and time** estimate as a range. It's a *distance-weighted*
   k-nearest-neighbors: closer past tasks count more, skewed features are compared on a log
@@ -111,7 +111,9 @@ python tokencast.py forecast --files 12 --tools 40
   total (sum of per-ticket p90s plus a Monte-Carlo p50/p90). Uses the same kNN forecaster and the
   same accurate-vs-floor labeling as `forecast`. A ticket can hint its own size inline, e.g.
   `- Add OAuth (files=8 tools=30 output=4000)` — those override the global `--files/--tools/--output`
-  for that ticket; otherwise each falls back to your history mean.
+  for that ticket; otherwise each falls back to your history mean. Tickets with no hint all land on
+  that same mean, so they get the **same** number — hint the ones whose size actually differs (the
+  command prints a note when un-sized tickets share one estimate).
 - **report** (secondary) — total spend, per-task distribution (p50/p90/p95/max), breakdown by
   project and model, your most expensive tasks, and an optional `--cap` overlay showing how many
   tasks a hard ceiling would have cut off mid-work. Tools like ccusage already do this well.
@@ -142,8 +144,9 @@ python tokencast.py report   ./sample_logs --segment
 - `--gap-min N` sets the idle-gap threshold in minutes (default `30`; `0` disables the gap rule).
 - `--split-on-user` additionally cuts at a fresh user turn once the current segment already has work
   in it (off by default — pure user-turn splitting over-segments).
-- Costs and feature counts of the segments **sum** to the whole-session totals; segmentation changes
-  the *unit of estimation*, not the underlying token accuracy (the floor caveat below still applies).
+- Costs and token/call counts of the segments **sum** to the whole-session totals (a file touched in
+  two segments counts in each, so `files_touched` may not); segmentation changes the *unit of
+  estimation*, not the underlying token accuracy (the floor caveat below still applies).
 
 The browser version mirrors this: tick **Segment long sessions into tasks** in the forecast panel
 and set the idle-gap minutes.
@@ -181,8 +184,8 @@ python tokencast.py report --refresh-prices
 ```
 
 **Verify high-stakes numbers against [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing).**
-The feed is community-maintained, not official — which is itself part of the argument: even *prices*
-should be a queryable endpoint the labs publish.
+The feed is community-maintained, not official, so double-check anything you're committing a
+budget to.
 
 ## Extending it (multi-agent)
 

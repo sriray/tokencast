@@ -10,13 +10,13 @@ guess. It reads the session logs your coding agent already writes to disk, learn
 what tasks *like the one you're planning* have actually cost (and taken) before,
 and returns a forecast as a RANGE -- p50/p90/p95 -- plus a sprint/project total.
 
-`forecast` is the point. `report` (spend attribution) is a secondary view; tools
-like ccusage already do attribution well. The novel half is looking forward.
+`forecast` is the primary command. `report` (spend attribution) is a secondary view;
+tools like ccusage already do attribution well. The forward-looking estimate is the
+part that's missing elsewhere.
 
-Today it targets Claude Code's JSONL transcripts (~/.claude/projects). The deeper
-point: this took an afternoon, and the providers -- who hold the only accurate,
-cross-customer telemetry -- could ship this as a "cost & time preview" inside plan
-mode tomorrow, so every estimate starts from data instead of a guess.
+Today it targets Claude Code's JSONL transcripts (~/.claude/projects). Absolute costs
+are a FLOOR because Claude Code undercounts input tokens; run tasks through the
+optimizer tier (tokencast-optimize) to measure them accurately and calibrate.
 
 No third-party dependencies. Python 3.8+.
 
@@ -32,7 +32,7 @@ import argparse, glob, json, math, os, random, re, statistics, sys
 from collections import defaultdict, namedtuple
 
 # --- Pricing (USD per 1M tokens). VERIFY against platform.claude.com/docs pricing;
-#     these reflect rates as of mid-2026 and WILL drift. Editing this is the point. ---
+#     these reflect rates as of mid-2026 and WILL drift. Edit them to match current pricing. ---
 PRICING = {
     "opus":   {"input": 5.0,  "output": 25.0},   # Opus 4.7 / 4.8
     "sonnet": {"input": 3.0,  "output": 15.0},   # Sonnet 4.6
@@ -582,10 +582,10 @@ def cmd_report(args):
     print()
     print("By project:")
     for k, v in sorted(by_proj.items(), key=lambda x: -x[1])[:8]:
-        print(f"  {v/total*100:5.1f}%  {money(v):>12}  {k}")
+        print(f"  {(v / total * 100 if total else 0.0):5.1f}%  {money(v):>12}  {k}")
     print("By model:")
     for k, v in sorted(by_model.items(), key=lambda x: -x[1])[:8]:
-        print(f"  {v/total*100:5.1f}%  {money(v):>12}  {k}")
+        print(f"  {(v / total * 100 if total else 0.0):5.1f}%  {money(v):>12}  {k}")
 
     # The honest part: data quality.
     total_turns = sum(s["assistant_turns"] for s in sessions)
@@ -599,8 +599,8 @@ def cmd_report(args):
     if fallback:
         print(f"  {fallback} session(s) had no model id; priced at Sonnet fallback")
     print("  Note: Claude Code's JSONL undercounts raw input tokens (cache fields are")
-    print("  reliable). Absolute costs here are a floor. The accurate number lives with")
-    print("  the provider. That gap is the whole argument -- see the essay.")
+    print("  reliable), so absolute costs here are a FLOOR. Accumulate accurate runs")
+    print("  (tokencast-optimize run/auto) to calibrate on real token counts.")
 
     if args.cap is not None:
         clipped = [s for s in sessions if s["cost"] > args.cap]
@@ -627,14 +627,31 @@ def _mins(x):
 
 
 def _dedup_sessions(sessions):
-    """Keep the first session per (project, session) key, order-preserving."""
-    seen, out = set(), []
+    """One session per (project, session) key, order-preserving.
+
+    On a key collision, prefer the accurate copy (a harness-measured run) over an
+    undercounted one, keeping the first occurrence's position.
+    """
+    order, by_key = [], {}
     for s in sessions:
         key = (s["project"], s["session"])
-        if key not in seen:
-            seen.add(key)
-            out.append(s)
-    return out
+        if key not in by_key:
+            by_key[key] = s
+            order.append(key)
+        elif s.get("accurate") and not by_key[key].get("accurate"):
+            by_key[key] = s
+    return [by_key[k] for k in order]
+
+
+def _validate_sizes(args):
+    """Reject negative size inputs before they reach log1p (which crashes on < 0).
+
+    Mirrors the inline-hint guard so the CLI flags can't sneak a negative through.
+    """
+    for name in ("files", "tools", "output", "count"):
+        v = getattr(args, name, None)
+        if v is not None and v < 0:
+            raise SystemExit(f"tokencast: --{name} must be >= 0, got {v}")
 
 
 # --------------------------------------------------------------------------------------
@@ -661,14 +678,8 @@ def _scale(value, feature):
 
 
 def _adaptive_k(n):
-    """Neighborhood size: legacy max(5, n//4), but capped so a tiny pool isn't 'all neighbors'.
-
-    For n >= 9 this equals max(5, n//4) exactly; it only tightens very small pools,
-    and never drops below the floor of 5.
-    """
-    base = max(5, n // 4)
-    cap = max(5, (3 * n) // 5)  # <= ~60% of the pool
-    return min(base, cap)
+    """Neighborhood size: max(5, n // 4) -- a floor of 5 so even tiny pools forecast."""
+    return max(5, n // 4)
 
 
 def _neighbor_weights(distances):
@@ -758,6 +769,7 @@ def _knn_forecast(sessions, target):
 
 
 def cmd_forecast(args):
+    _validate_sizes(args)
     segment = getattr(args, "segment", False)
     fmt = getattr(args, "format", "auto")
     runs = getattr(args, "runs", "./runs")
@@ -941,6 +953,7 @@ def _estimate_pool(args):
 
 
 def cmd_estimate(args):
+    _validate_sizes(args)
     try:
         with open(args.plan, encoding="utf-8") as fh:
             tickets = parse_plan(fh.read())
@@ -1037,6 +1050,14 @@ def cmd_estimate(args):
         if totals_t:
             line += f"   (time p90 {_mins(pct(totals_t,.9))}, sequential)"
         print(line)
+
+    hintless = sum(1 for t in tickets
+                   if t.files is None and t.tools is None and t.output is None)
+    if hintless >= 2:
+        print()
+        print(f"  Note: {hintless} tickets had no size hint, so they share one estimate")
+        print("        (your history mean). Add inline (files=.. tools=..) to size them apart.")
+
     print()
     print("  -> Put the p90 in the plan, not the p50. Parallelize across engineers to")
     print("     compress the timeline; the same task does not cost the same twice.")
