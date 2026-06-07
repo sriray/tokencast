@@ -79,4 +79,4 @@ command and the heavy optimizer tier ships as `tokencast-optimize`.
   dependencies and the optimizer tier installs via the `[optimize]` extra.
 - MIT `LICENSE`.
 
-[0.3.0]: https://github.com/OWNER/tokencast/releases/tag/v0.3.0
+[0.3.0]: https://github.com/sriray/tokencast/releases/tag/v0.3.0
