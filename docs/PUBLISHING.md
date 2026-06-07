@@ -8,9 +8,10 @@ TokenCast ships two console scripts — `tokencast` (the stdlib-only light tier)
 third-party deps; the optimize tier needs `claude-agent-sdk` + `pyyaml` and an Anthropic API key
 to run live.
 
-> Fill-in markers used below: replace **`OWNER`** with your GitHub username/org everywhere, and
-> **`<PYPI_TOKEN>`** with a PyPI API token (starts with `pypi-`). These are the only two values
-> you must supply.
+> This repo is already wired for the GitHub account **`sriray`** (it's in `pyproject.toml`'s
+> `[project.urls]` and the commands below). If you're shipping under a different user or org,
+> search-and-replace `sriray` everywhere first. The one secret you must supply is **`<PYPI_TOKEN>`**
+> — a PyPI API token (starts with `pypi-`).
 
 ---
 
@@ -20,9 +21,9 @@ This is already a git repo, so you only need to create the remote and push.
 
 1. Make sure `pyproject.toml` matches what you're shipping **before** you tag:
    - `version` should be `0.3.0` (the release you're tagging).
-   - `[project.urls]` should point at `https://github.com/OWNER/tokencast` (Homepage, Repository,
-     and ideally Issues). If those keys are missing or still say `OWNER`, fix them first — the
-     sibling packaging change owns `pyproject.toml`.
+   - `[project.urls]` should point at `https://github.com/sriray/tokencast` (Homepage, Repository,
+     and Issues). These are already set; only change them if you're shipping under a different
+     account/org.
 
 2. Commit anything outstanding (skip if your working tree is clean):
 
@@ -34,13 +35,13 @@ This is already a git repo, so you only need to create the remote and push.
 3. Create the public repo and set the remote. Easiest with the GitHub CLI:
 
    ```sh
-   gh repo create OWNER/tokencast --public --source=. --remote=origin --push
+   gh repo create sriray/tokencast --public --source=. --remote=origin --push
    ```
 
    If you prefer to do it by hand instead (create the empty repo in the GitHub UI first):
 
    ```sh
-   git remote add origin https://github.com/OWNER/tokencast.git
+   git remote add origin https://github.com/sriray/tokencast.git
    git branch -M main
    git push -u origin main
    ```
@@ -52,10 +53,11 @@ This is already a git repo, so you only need to create the remote and push.
    git push origin v0.3.0
    ```
 
-5. (Optional) Cut a GitHub Release from the tag:
+5. (Optional) Cut a GitHub Release from the tag. A ready-to-use, tailored notes file ships at
+   `docs/RELEASE_NOTES_v0.3.0.md`:
 
    ```sh
-   gh release create v0.3.0 --title "v0.3.0" --notes-file CHANGELOG.md
+   gh release create v0.3.0 --title "TokenCast v0.3.0" --notes-file docs/RELEASE_NOTES_v0.3.0.md
    ```
 
 > Keep the git tag (`v0.3.0`) and `pyproject.toml`'s `version` (`0.3.0`) in lockstep with the
@@ -137,18 +139,28 @@ scripts; the optimize tier's deps install via the `[optimize]` extra.
 browser** — nothing is uploaded to any server. State that on the page as a trust point: your
 JSONL never leaves your machine.
 
-The simplest host is GitHub Pages:
+This repo ships a Pages deploy workflow (`.github/workflows/pages.yml`) that publishes
+`tokencast.html` automatically. It stages the file as `index.html` (so the bare Pages URL serves
+the tool) and also keeps it at `/tokencast.html`.
 
-1. In the repo on GitHub: **Settings → Pages**. Under "Build and deployment", set Source to
-   **Deploy from a branch**, branch **`main`**, folder **`/ (root)`**, then Save.
+1. One-time: in the repo on GitHub, **Settings → Pages → Build and deployment**, set Source to
+   **GitHub Actions**, then Save. (This is the "GitHub Actions" source, *not* "Deploy from a
+   branch" — the bundled workflow does the deploy.)
 
-2. After it builds, the file is live at:
+2. The workflow runs on every push to `main` that touches `tokencast.html`, and you can also
+   trigger it by hand from the **Actions** tab → "Deploy tokencast.html to GitHub Pages" → **Run
+   workflow**. After the first successful run, the tool is live at:
 
    ```
-   https://OWNER.github.io/tokencast/tokencast.html
+   https://sriray.github.io/tokencast/            # bare URL — serves the app
+   https://sriray.github.io/tokencast/tokencast.html
    ```
 
    Both the folder/file picker and the "Load demo data" button work as-is over HTTPS.
+
+> Prefer no workflow? You can instead set Source to **Deploy from a branch** (`main`, `/ (root)`);
+> the file is then served at `https://sriray.github.io/tokencast/tokencast.html`. If you go this
+> route, delete `.github/workflows/pages.yml` so the two mechanisms don't fight.
 
 Alternatives, all equally fine since it's just one static file:
 

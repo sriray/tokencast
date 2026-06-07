@@ -11,7 +11,7 @@ requires-python = ">=3.8"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "TokenCast contributors" },
+    { name = "sriray" },
 ]
 keywords = [
     "llm",
@@ -40,9 +40,9 @@ optimize = ["claude-agent-sdk>=0.1.0", "pyyaml>=6.0"]
 dev = ["pytest>=7.0", "pyyaml>=6.0"]
 
 [project.urls]
-Homepage = "https://github.com/OWNER/tokencast"
-Repository = "https://github.com/OWNER/tokencast"
-Issues = "https://github.com/OWNER/tokencast/issues"
+Homepage = "https://github.com/sriray/tokencast"
+Repository = "https://github.com/sriray/tokencast"
+Issues = "https://github.com/sriray/tokencast/issues"
 
 [project.scripts]
 tokencast = "tokencast:main"
