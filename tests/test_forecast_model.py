@@ -52,19 +52,19 @@ def test_weighted_pct_empty_is_zero():
 
 
 # --------------------------------------------------------------------------- #
-# _adaptive_k: capped on tiny pools, == max(5,n//4) once n is large enough
+# _adaptive_k: a floor of 5, otherwise max(5, n//4)
 # --------------------------------------------------------------------------- #
 def test_adaptive_k_floor_is_five():
     assert tokencast._adaptive_k(6) >= 5
     assert tokencast._adaptive_k(5) == 5
 
 
-def test_adaptive_k_caps_tiny_pool():
-    # n=6: plain max(5, n//4) = 5 (83% of the pool). Cap to <= 60% -> 5 still
-    # but for n=7 the plain rule is still 5 (>60%); cap holds it sane.
+def test_adaptive_k_tiny_pool_stays_sane():
+    # The rule is just max(5, n//4): a small pool floors at 5 and never exceeds
+    # the pool size.
     for n in (6, 7, 8):
         k = tokencast._adaptive_k(n)
-        assert k <= max(5, (3 * n) // 5) or k == 5
+        assert k == 5
         assert k <= n
 
 
