@@ -141,13 +141,10 @@ JSONL never leaves your machine.
 
 This repo ships a Pages deploy workflow (`.github/workflows/pages.yml`) that publishes
 `tokencast.html` automatically. It stages the file as `index.html` (so the bare Pages URL serves
-the tool) and also keeps it at `/tokencast.html`.
+the tool) and also keeps it at `/tokencast.html`. Its "Configure Pages" step enables Pages itself
+(`enablement: true`), so there's **no manual Settings step** — pushing the repo is enough.
 
-1. One-time: in the repo on GitHub, **Settings → Pages → Build and deployment**, set Source to
-   **GitHub Actions**, then Save. (This is the "GitHub Actions" source, *not* "Deploy from a
-   branch" — the bundled workflow does the deploy.)
-
-2. The workflow runs on every push to `main` that touches `tokencast.html`, and you can also
+1. The workflow runs on every push to `main` that touches `tokencast.html`, and you can also
    trigger it by hand from the **Actions** tab → "Deploy tokencast.html to GitHub Pages" → **Run
    workflow**. After the first successful run, the tool is live at:
 
