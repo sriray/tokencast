@@ -57,13 +57,12 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="pill">a provocation, not a product</div>
+  <div class="pill">pre-flight cost &amp; time</div>
   <h1>TokenCast</h1>
   <p class="sub">Estimate what a coding task will <b>cost</b> and how <b>long</b> it takes — so you can
     build software estimates and plan timelines in the metered era. It learns from the logs your
     agent already writes to disk and returns a <b>range</b> (p50/p90/p95) for a single task or a whole
-    sprint, because the same task never costs the same twice. Companion to the essay
-    <i>“Software Just Went COGS.”</i></p>
+    sprint, because the same task rarely costs the same twice.</p>
 
   <div class="controls">
     <button id="demoBtn">▶ Load demo data</button>
@@ -73,8 +72,7 @@
     <span class="muted" id="status">No data loaded yet.</span>
   </div>
   <div class="privacy">🔒 Everything runs in your browser. Your logs are parsed locally and
-    <b>never uploaded</b> anywhere. That’s the point: the only way to keep your spend data private
-    is to compute on it yourself — or have the provider, who already holds it, do it for you.</div>
+    <b>never uploaded</b> anywhere. Nothing leaves your machine.</div>
 
   <details>
     <summary>Pricing (USD per 1M tokens) — edit if these have drifted</summary>
@@ -144,10 +142,10 @@
   </div>
 
   <p class="note" style="margin-top:40px;">
-    TokenCast targets Claude Code logs (<code>~/.claude/projects</code>). The numbers are a
-    <b>floor</b>: Claude Code records input tokens as a streaming placeholder, so true cost is
-    higher. The accurate figure exists — only the provider has it. A lab could ship this as a
-    “cost preview” inside plan mode tomorrow. That’s the whole argument.
+    TokenCast targets Claude Code logs (<code>~/.claude/projects</code>). Read the absolute numbers
+    as a <b>floor</b>: Claude Code records input tokens as a streaming placeholder, so true cost runs
+    higher. The ranges still hold up for relative planning — which tasks are expensive, where a cap
+    starts cutting off work, how one sprint compares to the next.
   </p>
 </div>
 
