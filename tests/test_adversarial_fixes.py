@@ -133,3 +133,66 @@ def test_duration_mixed_int_and_str_timestamps_no_crash(tmp_path):
     ])
     sess = tokencast.parse_session(str(p))      # must not raise
     assert sess["assistant_turns"] == 2
+
+
+# ===========================================================================
+# Wave 2 -- input validation (GAP-1 cap/gap-min, BUG-2/GAP-5 budget, GAP-3 count)
+# ===========================================================================
+import types
+
+import pytest
+
+
+def _rargs(path, **kw):
+    base = dict(path=path, cap=None, segment=False, gap_min=30, split_on_user=False,
+                format="auto", refresh_prices=False)
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def _budget_cfg(tmp_path):
+    cfg = tmp_path / "b.json"
+    cfg.write_text('{"period":"quarterly","period_start":"2026-04-01",'
+                   '"budgets":[{"scope":"global","amount":1000}]}', encoding="utf-8")
+    return cfg
+
+
+def _bargs(cfg, tmp_path, **kw):
+    base = dict(config=str(cfg), scope="global", logs=str(tmp_path / "none"),
+                runs=str(tmp_path / "none"), per_task=None, forecast=None,
+                refresh_prices=False)
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def test_report_rejects_negative_cap(tmp_path):
+    with pytest.raises(SystemExit):
+        tokencast.cmd_report(_rargs(str(tmp_path), cap=-5.0))
+
+
+def test_report_rejects_nonfinite_cap(tmp_path):
+    with pytest.raises(SystemExit):
+        tokencast.cmd_report(_rargs(str(tmp_path), cap=float("nan")))
+
+
+def test_report_rejects_negative_gap_min(tmp_path):
+    with pytest.raises(SystemExit):
+        tokencast.cmd_report(_rargs(str(tmp_path), segment=True, gap_min=-10))
+
+
+def test_forecast_rejects_absurd_count(tmp_path):
+    args = types.SimpleNamespace(path=str(tmp_path / "h"), runs=str(tmp_path / "r"),
+                                 files=8, tools=30, output=None, count=10_000_000,
+                                 refresh_prices=False)
+    with pytest.raises(SystemExit):
+        tokencast.cmd_forecast(args)
+
+
+def test_budget_rejects_nonfinite_per_task(tmp_path):
+    with pytest.raises(SystemExit):
+        tokencast.cmd_budget(_bargs(_budget_cfg(tmp_path), tmp_path, per_task=float("nan")))
+
+
+def test_budget_rejects_negative_forecast(tmp_path):
+    with pytest.raises(SystemExit):
+        tokencast.cmd_budget(_bargs(_budget_cfg(tmp_path), tmp_path, forecast=-50.0))

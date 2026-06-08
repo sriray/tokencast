@@ -568,6 +568,7 @@ def money(x):
 # Commands
 # --------------------------------------------------------------------------------------
 def cmd_report(args):
+    _validate_sizes(args)
     segment = getattr(args, "segment", False)
     fmt = getattr(args, "format", "auto")
     if segment:
@@ -669,15 +670,38 @@ def _dedup_sessions(sessions):
     return [by_key[k] for k in order]
 
 
-def _validate_sizes(args):
-    """Reject negative size inputs before they reach log1p (which crashes on < 0).
+_MAX_COUNT = 100_000  # sprint/project sanity bound (caps Monte-Carlo work, prevents hangs)
 
-    Mirrors the inline-hint guard so the CLI flags can't sneak a negative through.
+
+def _validate_sizes(args):
+    """Reject negative / non-finite / absurd numeric inputs before they reach log1p,
+    the Monte-Carlo draw count, or the cost math -- where they crash or print nonsense.
+
+    Covers every numeric knob across forecast/report/estimate/budget; the int-typed flags
+    can't be NaN but the float ones (--cap/--per-task/--forecast) can, so check finiteness.
     """
-    for name in ("files", "tools", "output", "count"):
+    for name in ("files", "tools", "output", "count", "gap_min", "cap",
+                 "per_task", "forecast"):
         v = getattr(args, name, None)
-        if v is not None and v < 0:
-            raise SystemExit(f"tokencast: --{name} must be >= 0, got {v}")
+        if v is None:
+            continue
+        flag = "--" + name.replace("_", "-")
+        if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or (isinstance(v, float) and not math.isfinite(v)):
+            raise SystemExit(f"tokencast: {flag} must be a finite number, got {v!r}")
+        if v < 0:
+            raise SystemExit(f"tokencast: {flag} must be >= 0, got {v}")
+    count = getattr(args, "count", None)
+    if count is not None and count > _MAX_COUNT:
+        raise SystemExit(f"tokencast: --count must be <= {_MAX_COUNT:,}, got {count:,}")
+
+
+def _mc_trials(n_per_trial):
+    """Monte-Carlo trial count, bounded so total draws stay near 5M: keeps the usual 5000
+    trials for ordinary sprints/plans but scales down for pathological sizes (no hang)."""
+    if n_per_trial <= 0:
+        return 0
+    return max(200, min(5000, 5_000_000 // n_per_trial))
 
 
 # --------------------------------------------------------------------------------------
@@ -872,7 +896,7 @@ def cmd_forecast(args):
     if args.count and args.count > 1:
         import random
         random.seed(0)
-        TRIALS = 5000
+        TRIALS = _mc_trials(args.count)
         totals_c, totals_t = [], []
         for _ in range(TRIALS):
             c = sum(random.choices(ncosts, weights=cweights, k=args.count))
@@ -1070,7 +1094,7 @@ def cmd_estimate(args):
     # Monte-Carlo roll-up over the union of matched draws, len(tickets) draws per trial.
     if len(tickets) > 1 and mc_costs:
         random.seed(0)
-        TRIALS = 5000
+        TRIALS = _mc_trials(len(tickets))
         totals_c, totals_t = [], []
         for _ in range(TRIALS):
             totals_c.append(sum(random.choices(mc_costs, weights=mc_cweights, k=len(tickets))))
@@ -1095,6 +1119,7 @@ def cmd_estimate(args):
 
 
 def cmd_budget(args):
+    _validate_sizes(args)
     import budget  # lazy import avoids a tokencast<->budget cycle
     import datetime
     cfg = budget.BudgetConfig.load(args.config)
