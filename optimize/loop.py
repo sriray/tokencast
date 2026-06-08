@@ -1,5 +1,6 @@
 """The optimize loop: eval baseline + candidates (xN) -> rank -> budget pass -> promote."""
 import os
+import sys
 
 from optimize import ranking
 from optimize import candidates as candidates_mod
@@ -9,7 +10,7 @@ from optimize.evalrun import run_evalset
 def run_optimize(baseline, candidates, evalset, *, runner=None, judge=None, repeats=1,
                  min_quality=None, by="cost", out_dir="runs", promote_to=None,
                  budget_remaining=None, need_tasks=None, generator=None, n_generated=0,
-                 skills_catalog=None, mcp_catalog=None):
+                 skills_catalog=None, mcp_catalog=None, max_spend=None):
     def _run_config(cfg):
         reports = []
         for i in range(max(1, repeats)):
@@ -31,13 +32,21 @@ def run_optimize(baseline, candidates, evalset, *, runner=None, judge=None, repe
             baseline, baseline_reports, n=n_generated, generator=generator,
             evalset=evalset, skills_catalog=skills_catalog, mcp_catalog=mcp_catalog)
 
-    # 3. evaluate the rest (deduped; baseline already evaluated)
+    # 3. evaluate the rest (deduped; baseline already evaluated). A --max-spend ceiling
+    #    halts the fan-out once MEASURED (accurate) spend reaches it, checked between configs.
+    spent = sum(r.total_cost_usd for r in baseline_reports)
     for cfg in working:
         if cfg.config_id in seen:
             continue
+        if max_spend is not None and spent >= max_spend:
+            print(f"  ! reached --max-spend ${max_spend:.2f} after {len(results)} config(s) "
+                  f"(${spent:.2f} measured); stopping.", file=sys.stderr)
+            break
         seen.add(cfg.config_id)
         all_configs.append(cfg)
-        results.append(ranking.aggregate(cfg.config_id, _run_config(cfg)))
+        reports = _run_config(cfg)
+        results.append(ranking.aggregate(cfg.config_id, reports))
+        spent += sum(r.total_cost_usd for r in reports)
 
     result = ranking.build_result(results, baseline.config_id, min_quality=min_quality,
                                   by=by, budget_remaining=budget_remaining,

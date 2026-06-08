@@ -238,3 +238,89 @@ def test_price_for_two_family_id_picks_earliest():
     assert key == "sonnet"
     _, key2 = tokencast.price_for("haiku-then-opus-blend")
     assert key2 == "haiku"
+
+
+# ===========================================================================
+# Wave 4 -- optimizer tier (judge NaN, provider-cost reconciliation,
+#           decompose partial cost, optimize --max-spend ceiling)
+# ===========================================================================
+from optimize.config import AgentConfig
+from optimize.candidates import model_sweep
+from optimize.decompose import SubTask, Decomposition, run_decomposed
+from optimize.evalset import Dimension, EvalSet
+from optimize.judge import score_dimension
+from optimize.loop import run_optimize
+from optimize.result import RunResult
+
+
+def _rr(**kw):
+    base = dict(task_id="t", config_id="c", model_usage={}, cost_usd=0.0, duration_ms=0,
+                num_turns=1, transcript=[], final_output="done", files_changed=[],
+                accurate=True)
+    base.update(kw)
+    return RunResult(**base)
+
+
+def _usage(out):
+    return {"input_tokens": 0, "output_tokens": out,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+
+
+def _runner_1k(prompt, options, cwd):
+    model = options["model"]
+    return {"turns": [{"model": model, "content": []}],
+            "result": {"model_usage": {model: _usage(1000)}, "num_turns": 1,
+                       "duration_ms": 1000, "total_cost_usd": 0.0, "result_text": "done"}}
+
+
+def test_judge_nonfinite_score_is_zero_not_perfect():
+    dim = Dimension.from_dict({"name": "x", "judge": "rubric 0-1"})
+    assert score_dimension(_rr(), dim, judge=lambda p: float("nan")) == 0.0
+    assert score_dimension(_rr(), dim, judge=lambda p: float("inf")) == 0.0
+
+
+def test_runresult_cost_reconciliation():
+    modeled, provider, rel = _rr(cost_usd=0.10, provider_cost_usd=0.12).cost_reconciliation()
+    assert modeled == 0.10 and provider == 0.12
+    assert abs(rel - (0.02 / 0.12)) < 1e-9
+    assert _rr(cost_usd=0.10, provider_cost_usd=0.0).cost_reconciliation()[2] is None
+
+
+def _dtask():
+    return EvalSet.from_dict({"tasks": [{"id": "slug", "prompt": "Build",
+        "dimensions": [{"name": "clarity", "judge": "clear? 0-1"}]}]}).tasks[0]
+
+
+def test_decompose_keeps_incurred_cost_on_partial_failure():
+    calls = {"i": 0}
+
+    def runner(prompt, options, cwd):
+        calls["i"] += 1
+        if calls["i"] == 2:
+            raise RuntimeError("step 2 failed")
+        return {"turns": [{"model": options["model"], "content": []}],
+                "result": {"model_usage": {"sonnet": _usage(1000)}, "num_turns": 1,
+                           "duration_ms": 100, "total_cost_usd": 0.0, "result_text": "s1"}}
+
+    plan = Decomposition([SubTask("s1"), SubTask("s2")])
+    score = run_decomposed(_dtask(), AgentConfig(config_id="b", model="sonnet"),
+                           plan, runner=runner, judge=lambda p: 1.0)
+    assert score.cost_usd > 0   # step-1's incurred cost is recorded, not dropped to 0
+
+
+def _ml_baseline(tmp_path):
+    d = tmp_path / "baseline"
+    d.mkdir()
+    (d / "metadata.yaml").write_text("model: sonnet\n")
+    return AgentConfig.load(str(d))
+
+
+def test_optimize_max_spend_stops_before_candidates(tmp_path):
+    baseline = _ml_baseline(tmp_path)
+    cands = model_sweep(baseline)   # opus + haiku candidates
+    es = EvalSet.from_dict({"tasks": [{"id": "t1", "prompt": "p",
+        "dimensions": [{"name": "q", "judge": "ok? 0-1"}]}]})
+    # baseline (sonnet, 1000 out) costs $0.015; a tiny ceiling stops before candidates.
+    res = run_optimize(baseline, cands, es, runner=_runner_1k, judge=lambda p: 1.0,
+                       out_dir=str(tmp_path / "runs"), max_spend=0.001)
+    assert res.winner_id == baseline.config_id   # only baseline evaluated

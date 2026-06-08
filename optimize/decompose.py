@@ -143,7 +143,15 @@ def run_decomposed(task, config, decomposition, *, runner=None, judge=None, out_
         for k, step in enumerate(decomposition.steps):
             step_config = dataclasses.replace(config, model=step.model or config.model)
             t = {"id": f"{task.id}#s{k}", "prompt": step.prompt, "cwd": cwd}
-            res = run_task(t, step_config, runner=runner)
+            try:
+                res = run_task(t, step_config, runner=runner)
+            except Exception as ex:
+                # A sub-task blew up mid-sequence. Stop, but KEEP the cost already incurred
+                # by the earlier steps (real API spend) -- scoring the partial state will
+                # reflect the incomplete work, and the strategy won't win the quality floor.
+                print(f"  ! decomposition step {k} of {task.id} failed: {ex}; "
+                      f"scoring partial state", file=sys.stderr)
+                break
             if out_dir:
                 res.to_jsonl(os.path.join(
                     out_dir, f"{task.id}-s{k}-{step_config.config_id}.jsonl"))

@@ -7,11 +7,16 @@ fake judge so scoring runs with zero spend.
 
 def score_dimension(run_result, dimension, judge=None):
     """judge: callable(prompt: str) -> float. Defaults to the live SDK judge."""
+    import math
     judge = judge or _default_judge
     prompt = _build_prompt(run_result, dimension)
     try:
         score = float(judge(prompt))
     except (TypeError, ValueError):
+        score = 0.0
+    # A NaN/inf score must NOT clamp to a perfect 1.0 (min(1.0, nan) == 1.0), which would
+    # satisfy a required-dimension gate and promote a broken config. Treat it as 0.
+    if not math.isfinite(score):
         score = 0.0
     return max(0.0, min(1.0, score))
 
