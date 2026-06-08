@@ -5,6 +5,58 @@ All notable changes to TokenCast are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-06-08
+
+A correctness, robustness, and security hardening pass (eight waves of adversarial
+review plus a meta-review and live end-to-end verification). No new features; every
+number TokenCast prints is now harder to make wrong. The `tokencast.py` and
+`tokencast.html` implementations stay in lockstep on all cost/forecast math.
+
+### Fixed
+
+- **Forecast no longer reports a confident calibrated `$0`.** The accuracy bridge
+  now calibrates only on accurate runs that carry a usable (>0) cost signal, so a
+  batch of failed/empty harness runs (stamped accurate at `$0`) can't flip the basis
+  to "calibrated" and drop the floor caveat. Applied in both `forecast` and
+  `estimate`, CLI and browser.
+- **Live pricing can't zero out a model family.** A `$0`/negative entry in the
+  community cost map (free preview SKUs exist) is skipped instead of overwriting a
+  family's price with `$0` and silently zeroing every cost.
+- **Forecast weighting uses every neighbor.** The largest neighbor's distance weight
+  was ignored, flattening the p90; it now moves the estimate.
+- **Parser robustness.** One malformed token value, a non-dict `usage`, a non-string
+  `model` id, negative/`inf`/`NaN` token counts, a UTF-8 BOM, fenced code blocks, and
+  mixed timezone / naive / numeric timestamps no longer crash, drop a whole session,
+  or silently produce `NaN`/`inf` costs.
+- **`budget` project scope matches real logs.** `project:<name>` now matches Claude
+  Code's mangled-path project dirs (e.g. `-Users-me-dev-tokencast`) instead of
+  silently consuming nothing and reporting the full cap as remaining.
+- **`budget` no longer double-counts** a run that appears in both the real logs and
+  `./runs` (deduped by session, preferring the accurate copy).
+- **`estimate` ignores markdown horizontal rules** (`- - -`, `* * *`) instead of
+  counting them as plan tickets and inflating the sprint total.
+- **`report`/`forecast` validate every numeric CLI input** and bound the Monte-Carlo
+  roll-up, so bad flags fail loudly instead of hanging or printing nonsense.
+
+### Security (optimizer tier)
+
+- **Path-traversal closed.** Eval-set task ids and config ids are confined to safe
+  path components (an `id` like `../../etc/cron.d/x` can no longer write outside the
+  run dir), and rule-check file paths are confined to the task sandbox (no reading
+  arbitrary host files to game a score).
+- **Symlink handling.** Seed/skills dirs preserve symlinks instead of copying a
+  linked secret's contents into persisted run artifacts; the `command`-check trust
+  boundary (a rule runs an arbitrary shell command) is now documented loudly.
+- **Atomic artifact writes.** Run JSONL and `*.json` summaries are written via a temp
+  file + atomic rename, so a crash mid-write can't leave a truncated file that the
+  forecaster reads back as a short, under-counted history.
+
+### Changed
+
+- Optimizer ranking excludes failed (`$0`) configs from the Pareto front and the
+  winner; the `--max-spend` ceiling halts on measured spend; a non-finite judge score
+  maps to `0` instead of a passing `1.0`.
+
 ## [0.3.0] - 2026-06-06
 
 First packaged release: the light tier is installable as a `tokencast` console
