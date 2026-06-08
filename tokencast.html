@@ -168,10 +168,14 @@ function priceFor(model,P){
   for(const k of Object.keys(P.models)) if(m.includes(k)) return P.models[k];
   return P.models.sonnet;
 }
+// Token/count fields must be finite numbers; anything else (string, undefined, ...) -> 0.
+function num(x){ return (typeof x==="number" && isFinite(x)) ? x : 0; }
+// A usable explicit cost override: a finite, non-negative number.
+function validCost(v){ return typeof v==="number" && isFinite(v) && v>=0; }
 function entryCost(u,model,P){
   const p=priceFor(model,P);
-  const inp=u.input_tokens||0, out=u.output_tokens||0,
-        cw=u.cache_creation_input_tokens||0, cr=u.cache_read_input_tokens||0;
+  const inp=num(u.input_tokens), out=num(u.output_tokens),
+        cw=num(u.cache_creation_input_tokens), cr=num(u.cache_read_input_tokens);
   return (inp*p.input + cw*p.input*P.cw + cr*p.input*P.cr + out*p.output)/1e6;
 }
 
@@ -194,10 +198,10 @@ function reduceEntries(entries, name, project, P){
     if(e.type==="assistant" || msg.role==="assistant"){
       const u=msg.usage; const model=msg.model||e.model;
       if(u){
-        s.assistant_turns++; s.output+=u.output_tokens||0; s.cache_read+=u.cache_read_input_tokens||0;
+        s.assistant_turns++; s.output+=num(u.output_tokens); s.cache_read+=num(u.cache_read_input_tokens);
         if(model) s.models.add(model);
-        s.cost += (typeof e.costUSD==="number") ? e.costUSD : entryCost(u,model,P);
-        if((u.output_tokens||0)>0 && (u.input_tokens||0)<=1) s.undercount++;
+        s.cost += validCost(e.costUSD) ? e.costUSD : entryCost(u,model,P);
+        if(num(u.output_tokens)>0 && num(u.input_tokens)<=1) s.undercount++;
       }
       if(Array.isArray(msg.content)) for(const b of msg.content){
         if(b && b.type==="tool_use"){ s.tool_calls++;
@@ -283,14 +287,18 @@ function median(a){ const x=[...a].sort((p,q)=>p-q); if(!x.length) return 0; con
 function neighborWeights(d){ const pos=d.filter(x=>x>0); let med=pos.length?median(pos):1; if(med<=0)med=1;
   return d.map(x=>1/(1+x/med)); }
 function weightedPct(vals,ws,q){
+  // Symmetric type-7 weighted percentile (mirrors tokencast.py _weighted_pct): every
+  // weight -- including the largest point's -- shifts the interior positions, and it
+  // reduces exactly to pct() for equal weights.
   if(!vals.length) return 0;
   const pairs=vals.map((v,i)=>[v,ws[i]]).sort((a,b)=>a[0]-b[0]);
   const xs=pairs.map(p=>p[0]), w=pairs.map(p=>p[1]), n=xs.length;
   if(n===1) return xs[0];
   const total=w.reduce((a,b)=>a+b,0); if(total<=0) return pct(vals,q);
-  const cum=[]; let pre=0; for(const x of w){ cum.push(pre); pre+=x; }
-  const span=total-w[n-1]; if(span<=0) return xs[n-1];
-  const positions=cum.map(c=>c/span);
+  const cum=[]; let run=0; for(const x of w){ run+=x; cum.push(run); }
+  const half0=w[0]/2, halfN=w[n-1]/2, denom=total-half0-halfN;
+  if(denom<=0) return pct(vals,q);
+  const positions=cum.map((c,i)=>(c-w[i]/2-half0)/denom);
   if(q<=positions[0]) return xs[0];
   if(q>=positions[n-1]) return xs[n-1];
   for(let i=1;i<n;i++){ if(q<=positions[i]){ const lo=positions[i-1],hi=positions[i];

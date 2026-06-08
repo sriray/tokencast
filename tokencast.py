@@ -130,12 +130,27 @@ def price_for(model):
     return PRICING["sonnet"], "sonnet?"  # fallback; flagged in output
 
 
+def _num(x):
+    """Token/count fields must be numbers; anything else (str, list, None, bool) -> 0.
+
+    Guards the parsers against a malformed JSONL value silently crashing (and thereby
+    dropping) an entire otherwise-valid session.
+    """
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0
+
+
+def _valid_cost(v):
+    """A usable explicit cost override: a finite, non-negative real (not a bool)."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and v >= 0)
+
+
 def entry_cost(usage, model):
     p, _ = price_for(model)
-    inp  = usage.get("input_tokens", 0) or 0
-    out  = usage.get("output_tokens", 0) or 0
-    cw   = usage.get("cache_creation_input_tokens", 0) or 0
-    cr   = usage.get("cache_read_input_tokens", 0) or 0
+    inp  = _num(usage.get("input_tokens"))
+    out  = _num(usage.get("output_tokens"))
+    cw   = _num(usage.get("cache_creation_input_tokens"))
+    cr   = _num(usage.get("cache_read_input_tokens"))
     return (inp * p["input"]
             + cw * p["input"] * CACHE_WRITE_MULT
             + cr * p["input"] * CACHE_READ_MULT
@@ -153,7 +168,30 @@ def _new_summary(session, project):
         "cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
         "assistant_turns": 0, "tool_calls": 0, "files": set(),
         "models": set(), "undercount_hits": 0, "accurate": False, "ts_first": None, "ts_last": None,
+        "_ep_first": None, "_ep_last": None,
     }
+
+
+def _track_ts(s, ts):
+    """Record first/last timestamps by CHRONOLOGICAL epoch, not lexical string order.
+
+    Keeps the raw string (report slices ts_first[:10] for by-day grouping) but decides
+    earliest/latest by parsed epoch -- robust to mixed tz offsets, naive vs aware, and
+    numeric-vs-string timestamps (which previously crashed min()/max()).
+    """
+    ep = _epoch(ts)
+    if ep is None:
+        return
+    if s["_ep_first"] is None or ep < s["_ep_first"]:
+        s["_ep_first"], s["ts_first"] = ep, ts
+    if s["_ep_last"] is None or ep > s["_ep_last"]:
+        s["_ep_last"], s["ts_last"] = ep, ts
+
+
+def _finalize_duration(s):
+    """Wall-clock minutes from the tracked epoch span (rough: includes idle/think time)."""
+    a, b = s["_ep_first"], s["_ep_last"]
+    s["duration_min"] = round((b - a) / 60.0, 1) if (a is not None and b is not None) else None
 
 
 def reduce_entries(entries, session, project):
@@ -167,28 +205,26 @@ def reduce_entries(entries, session, project):
             continue
         if e.get("tokencast_accurate") is True:
             s["accurate"] = True
-        ts = e.get("timestamp")
-        if ts:
-            s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
-            s["ts_last"]  = max(s["ts_last"], ts) if s["ts_last"] else ts
+        _track_ts(s, e.get("timestamp"))
         msg = e.get("message") or {}
         if e.get("type") == "assistant" or msg.get("role") == "assistant":
-            usage = msg.get("usage") or {}
+            usage = msg.get("usage")
+            usage = usage if isinstance(usage, dict) else {}
             model = msg.get("model") or e.get("model")
             if usage:
                 s["assistant_turns"] += 1
-                s["input"]       += usage.get("input_tokens", 0) or 0
-                s["output"]      += usage.get("output_tokens", 0) or 0
-                s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
-                s["cache_read"]  += usage.get("cache_read_input_tokens", 0) or 0
+                s["input"]       += _num(usage.get("input_tokens"))
+                s["output"]      += _num(usage.get("output_tokens"))
+                s["cache_write"] += _num(usage.get("cache_creation_input_tokens"))
+                s["cache_read"]  += _num(usage.get("cache_read_input_tokens"))
                 if model:
                     s["models"].add(model)
-                # Prefer an explicit cost field if the tool wrote one; else compute.
-                s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+                # Prefer an explicit cost field if the tool wrote a sane one; else compute.
+                s["cost"] += e.get("costUSD") if _valid_cost(e.get("costUSD")) \
                     else entry_cost(usage, model)
                 # Known Claude Code bug: input_tokens is a streaming placeholder,
                 # often 0/1 while real input lives in the cache fields.
-                if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+                if _num(usage.get("output_tokens")) > 0 and _num(usage.get("input_tokens")) <= 1:
                     s["undercount_hits"] += 1
             # tool calls + files touched, from content blocks
             content = msg.get("content")
@@ -202,7 +238,7 @@ def reduce_entries(entries, session, project):
                             if fp:
                                 s["files"].add(fp)
     s["files_touched"] = len(s["files"])
-    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    _finalize_duration(s)
     return s
 
 
@@ -232,11 +268,16 @@ def parse_session(path):
 # Segmentation (ROADMAP #2): split one transcript into task-sized units.
 # --------------------------------------------------------------------------------------
 def _epoch(ts):
+    """Parse a timestamp to a UTC epoch (seconds). Naive timestamps are treated as UTC
+    so the result is deterministic (not dependent on the host timezone). None on failure."""
     import datetime
     try:
-        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
-    except Exception:
+        dt = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
 
 
 def _has_usage(entry):
@@ -305,18 +346,6 @@ def parse_session_segments(path, gap_min=30, split_on_user=False):
         for i, s in enumerate(kept, 1):
             s["session"] = f"{base}#{i}"
     return kept
-
-
-def _duration_min(t0, t1):
-    """Wall-clock minutes between first and last event (rough: includes idle/think time)."""
-    import datetime
-    def ep(t):
-        try:
-            return datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            return None
-    a, b = (ep(t0) if t0 else None), (ep(t1) if t1 else None)
-    return round((b - a) / 60.0, 1) if (a is not None and b is not None and b >= a) else None
 
 
 def load(root):
@@ -416,22 +445,19 @@ def _read_generic(path):
             continue
         saw_msg = True
         model = e.get("model")
-        ts = e.get("timestamp")
-        if ts:
-            s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
-            s["ts_last"] = max(s["ts_last"], ts) if s["ts_last"] else ts
+        _track_ts(s, e.get("timestamp"))
         s["assistant_turns"] += 1
-        s["input"] += usage.get("input_tokens", 0) or 0
-        s["output"] += usage.get("output_tokens", 0) or 0
-        s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
-        s["cache_read"] += usage.get("cache_read_input_tokens", 0) or 0
+        s["input"] += _num(usage.get("input_tokens"))
+        s["output"] += _num(usage.get("output_tokens"))
+        s["cache_write"] += _num(usage.get("cache_creation_input_tokens"))
+        s["cache_read"] += _num(usage.get("cache_read_input_tokens"))
         if model:
             s["models"].add(model)
-        s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+        s["cost"] += e.get("costUSD") if _valid_cost(e.get("costUSD")) \
             else entry_cost(usage, model)
         # Same input-token undercount honesty as Claude Code: a placeholder input_tokens
         # alongside real output counts as a suspect entry.
-        if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+        if _num(usage.get("output_tokens")) > 0 and _num(usage.get("input_tokens")) <= 1:
             s["undercount_hits"] += 1
         tools = e.get("tools")
         if isinstance(tools, list):
@@ -446,7 +472,7 @@ def _read_generic(path):
     if not saw_msg:
         return []
     s["files_touched"] = len(s["files"])
-    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    _finalize_duration(s)
     return [s]
 
 
@@ -692,7 +718,16 @@ def _neighbor_weights(distances):
 
 
 def _weighted_pct(values, weights, q):
-    """Distance-weighted percentile. Reduces to pct() when all weights are equal."""
+    """Distance-weighted percentile. Reduces EXACTLY to pct() when all weights are equal.
+
+    Symmetric type-7 plotting positions: position(i) uses the inclusive cumulative weight
+    minus half of point i's own weight minus half the first point's weight, normalized so
+    positions[0]==0 and positions[-1]==1. Unlike the old `total - weights[-1]` form, every
+    weight -- including the largest point's -- shifts the interior positions, so a far
+    (low-weight) neighbor is genuinely down-weighted instead of ignored. (With only two
+    points there is no interior, so the result is weight-independent -- inherent to
+    interpolating a percentile between exactly two samples.)
+    """
     if not values:
         return 0.0
     pairs = sorted(zip(values, weights), key=lambda vw: vw[0])
@@ -704,19 +739,15 @@ def _weighted_pct(values, weights, q):
     total = sum(ws)
     if total <= 0:
         return pct(values, q)
-    # Weighted plotting positions that generalize pct()'s (n-1)*q convention:
-    # position(i) = (cumulative weight strictly before i) + (w_i - 1)/... -> use the
-    # cumulative *interior* weight so equal weights give exactly i/(n-1).
-    # p_i = (C_i - w_i) / (total - w_last_avg) is fragile; instead place each point at
-    # the cumulative weight of the *preceding* points, scaled to [0, 1].
-    cum, pre = [], 0.0
+    cum, run = [], 0.0
     for w in ws:
-        cum.append(pre)
-        pre += w
-    span = total - ws[-1]  # weight mass strictly before the last point
-    if span <= 0:
-        return xs[-1]
-    positions = [c / span for c in cum]  # positions[0]=0, positions[-1]=1
+        run += w
+        cum.append(run)  # inclusive cumulative weight up to and including i
+    half0, halfN = ws[0] / 2.0, ws[-1] / 2.0
+    denom = total - half0 - halfN
+    if denom <= 0:
+        return pct(values, q)
+    positions = [(c - w / 2.0 - half0) / denom for c, w in zip(cum, ws)]
     if q <= positions[0]:
         return xs[0]
     if q >= positions[-1]:
