@@ -15,7 +15,12 @@ def stage_skills(config, cwd):
     for name in os.listdir(src):
         s = os.path.join(src, name)
         d = os.path.join(dest, name)
-        if os.path.isdir(s):
-            shutil.copytree(s, d, dirs_exist_ok=True)
+        # Preserve symlinks as symlinks (don't dereference) -- a poisoned skills dir could
+        # otherwise copy a secret file's contents into the agent-readable sandbox.
+        if os.path.islink(s):
+            if not os.path.lexists(d):
+                os.symlink(os.readlink(s), d)
+        elif os.path.isdir(s):
+            shutil.copytree(s, d, symlinks=True, dirs_exist_ok=True)
         else:
             shutil.copy2(s, d)

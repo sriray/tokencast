@@ -10,15 +10,27 @@ import signal
 import subprocess
 
 
+def _confined(cwd, rel):
+    """Resolve `rel` under `cwd`, or return None if it escapes the sandbox. realpath also
+    resolves symlinks, so an absolute path, a '..' walk, or an in-sandbox symlink pointing
+    out is all caught. check.path can come from an LLM-generated eval set (untrusted)."""
+    base = os.path.realpath(cwd)
+    full = os.path.realpath(os.path.join(base, rel))
+    if full != base and not full.startswith(base + os.sep):
+        return None
+    return full
+
+
 def run_check(check, cwd):
     """check: optimize.evalset.Check. Returns True/False. Never raises on check failure."""
     if check.kind == "command":
         return _run_command(check, cwd)
     if check.kind == "file_exists":
-        return os.path.exists(os.path.join(cwd, check.path))
+        p = _confined(cwd, check.path)
+        return bool(p) and os.path.exists(p)
     if check.kind == "file_contains":
-        p = os.path.join(cwd, check.path)
-        if not os.path.isfile(p):
+        p = _confined(cwd, check.path)
+        if not p or not os.path.isfile(p):
             return False
         with open(p, encoding="utf-8", errors="ignore") as fh:
             text = fh.read()

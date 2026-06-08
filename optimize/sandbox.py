@@ -41,8 +41,13 @@ def task_sandbox(task):
             for name in os.listdir(src):
                 s = os.path.join(src, name)
                 t = os.path.join(d, name)
-                if os.path.isdir(s):
-                    shutil.copytree(s, t)
+                # Preserve symlinks as symlinks (don't dereference): a seed dir is partially
+                # untrusted, and a link like leak -> ~/.aws/credentials would otherwise copy
+                # the secret's CONTENTS into the agent-readable sandbox.
+                if os.path.islink(s):
+                    os.symlink(os.readlink(s), t)
+                elif os.path.isdir(s):
+                    shutil.copytree(s, t, symlinks=True)
                 else:
                     shutil.copy2(s, t)
         yield d

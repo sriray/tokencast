@@ -420,3 +420,103 @@ def test_config_save_roundtrips_skills_source(tmp_path):
     back = AgentConfig.load(str(dest))
     assert back.skills_source == os.path.join(str(dest), "skills")
     assert os.path.exists(os.path.join(str(dest), "skills", "demo", "SKILL.md"))
+
+
+# =============================================================================
+# Wave 6 — fresh lenses (degenerate forecast inputs, less-trafficked commands,
+#          heavy-tier security/sandbox):
+#   W6-1  >=5 accurate-but-$0 runs must NOT flip to a calibrated $0 basis
+#   W6-2  a 0/negative live price must not zero out a model family
+#   W6-3  a path-traversal task id is rejected (arbitrary file write)
+#   W6-4  a path-traversal config_id is rejected
+#   W6-5  a check.path cannot escape the sandbox (read escape)
+#   W6-6  symlinks in a skills dir are preserved, not dereferenced (exfiltration)
+#   W6-7  JSON artifacts are written atomically
+#   W6-8  markdown thematic breaks ('- - -') are not counted as plan tickets
+# =============================================================================
+from optimize.checks import run_check
+
+
+def _fc_sess(cost, accurate):
+    return {"session": "s", "project": "p", "cost": cost, "accurate": accurate}
+
+
+# --- W6-1: calibration gates on cost SIGNAL, not just accurate-count ----------
+def test_accurate_basis_ignores_zero_cost_accurate_runs():
+    pool = [_fc_sess(0.0, True) for _ in range(5)] + [_fc_sess(1.0, False) for _ in range(5)]
+    sessions, calibrated = tokencast._accurate_basis(pool)
+    assert calibrated is False                       # 5 failed $0 "accurate" runs don't calibrate
+    assert len(sessions) == 10                        # falls back to the full (floor) pool
+
+
+def test_accurate_basis_calibrates_on_usable_accurate_runs():
+    pool = [_fc_sess(2.0, True) for _ in range(5)] + [_fc_sess(1.0, False) for _ in range(3)]
+    sessions, calibrated = tokencast._accurate_basis(pool)
+    assert calibrated is True and len(sessions) == 5 and all(s["accurate"] for s in sessions)
+
+
+# --- W6-2: a 0/negative live price never zeroes out a family -----------------
+def test_family_best_skips_zero_rate_entries():
+    zero = {"claude-opus-4-x": {"input_cost_per_token": 0, "output_cost_per_token": 0,
+                                "litellm_provider": "anthropic"}}
+    assert tokencast._family_best(zero, "opus") is None            # keep the built-in default
+    good = {"claude-opus-4-x": {"input_cost_per_token": 5e-6, "output_cost_per_token": 25e-6,
+                                "litellm_provider": "anthropic"}}
+    assert tokencast._family_best(good, "opus") is not None
+
+
+# --- W6-3/W6-4: path-traversal ids are rejected ------------------------------
+def test_evalset_rejects_path_traversal_task_id():
+    for bad in ("../../etc/passwd", "/abs/path", "a/b", ".."):
+        with pytest.raises(ValueError, match="safe path component"):
+            EvalSet.from_dict({"tasks": [{"id": bad, "prompt": "p",
+                "dimensions": [{"name": "q", "judge": "ok?"}]}]})
+
+
+def test_config_rejects_path_traversal_config_id():
+    for bad in ("../escape", "/abs", "a/b", ".."):
+        with pytest.raises(ValueError, match="safe path component"):
+            AgentConfig(config_id=bad, model="sonnet")
+
+
+# --- W6-5: a check path cannot read outside the sandbox ----------------------
+def test_check_path_cannot_escape_sandbox(tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("x")
+    sbx = tmp_path / "sbx"
+    sbx.mkdir()
+    assert run_check(Check(kind="file_exists", path=str(secret)), str(sbx)) is False   # absolute
+    assert run_check(Check(kind="file_exists", path="../secret.txt"), str(sbx)) is False  # ..
+    (sbx / "in.txt").write_text("y")
+    assert run_check(Check(kind="file_exists", path="in.txt"), str(sbx)) is True       # in-sandbox
+
+
+# --- W6-6: a symlink in a skills dir is preserved, not dereferenced -----------
+def test_stage_skills_preserves_symlinks_no_deref(tmp_path):
+    from optimize import staging
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "leak").symlink_to(secret)               # poisoned skills dir
+    cfg = AgentConfig(config_id="c", model="sonnet", skills_source=str(skills))
+    cwd = tmp_path / "sbx"
+    cwd.mkdir()
+    staging.stage_skills(cfg, str(cwd))
+    staged = cwd / ".claude" / "skills" / "leak"
+    assert staged.is_symlink()                          # not a copy of the secret's contents
+
+
+# --- W6-7: JSON artifacts are written atomically -----------------------------
+def test_atomicio_dump_json_roundtrips_no_temp_left(tmp_path):
+    from optimize import atomicio
+    p = tmp_path / "sub" / "out.json"
+    atomicio.dump_json({"a": 1, "b": [2, 3]}, str(p))
+    assert json.loads(p.read_text()) == {"a": 1, "b": [2, 3]}
+    assert not list(tmp_path.glob("**/.tmp-*"))         # no leftover temp file
+
+
+# --- W6-8: markdown thematic breaks are not plan tickets ---------------------
+def test_parse_plan_skips_thematic_breaks():
+    plan = "- real ticket one\n- - -\n* * *\n- real ticket two\n"
+    assert [t.text for t in tokencast.parse_plan(plan)] == ["real ticket one", "real ticket two"]

@@ -1,12 +1,12 @@
 """Pure ranking for the optimize loop: aggregate repeats, quality floor, Pareto, cost-first
 selection. No eval; no I/O beyond to_json. (The budget pass is added in a later task.)"""
 import dataclasses
-import json
 from dataclasses import dataclass
 from typing import List, Optional
 
 import tokencast
 import budget
+from optimize import atomicio
 
 
 @dataclass
@@ -41,9 +41,7 @@ class OptimizeResult:
     winner_fits: Optional[bool] = None
 
     def to_json(self, path):
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(dataclasses.asdict(self), fh, indent=2)
-        return path
+        return atomicio.dump_json(dataclasses.asdict(self), path)
 
 
 def aggregate(config_id, reports):

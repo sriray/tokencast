@@ -3,9 +3,21 @@
 A unified dimension model: each Dimension has a weight and is scored EITHER by rule checks
 OR by an LLM judge rubric (exactly one).
 """
+import os
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+
+def _safe_component(value, field):
+    """Reject a value that isn't a safe single path component. Task ids (and config ids)
+    flow into output paths like out_dir/<id>-<config>.jsonl; an id of '../../etc/x' or an
+    absolute path would write OUTSIDE out_dir. Eval sets can be LLM-generated, so this input
+    is partially untrusted."""
+    if value in (".", "..") or value != os.path.basename(value) or os.path.isabs(value):
+        raise ValueError(
+            f"{field} {value!r} must be a safe path component (no '/', '..', or absolute path)")
+    return value
 
 try:
     import yaml
@@ -122,6 +134,7 @@ class EvalTask:
     def from_dict(cls, d):
         if not d.get("id"):
             raise ValueError("task requires 'id'")
+        _safe_component(d["id"], "task id")
         if not d.get("prompt"):
             raise ValueError(f"task {d.get('id')!r} requires 'prompt'")
         if d.get("seed_dir") and d.get("seed_repo"):

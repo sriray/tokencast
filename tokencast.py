@@ -63,6 +63,9 @@ def _family_best(j, fam):
         ic, oc = v.get("input_cost_per_token"), v.get("output_cost_per_token")
         if not isinstance(ic, (int, float)) or not isinstance(oc, (int, float)):
             continue
+        if ic <= 0 or oc <= 0:
+            continue  # a 0/negative rate (free preview entries exist) would price a whole
+                      # family at $0 and silently zero out every cost; keep the default instead
         if best is None or ic > best.get("input_cost_per_token", 0):
             best = v
     return best
@@ -605,14 +608,12 @@ def cmd_report(args):
         return
     total = sum(s["cost"] for s in sessions)
     costs = [s["cost"] for s in sessions]
-    by_proj, by_model, by_day = defaultdict(float), defaultdict(float), defaultdict(float)
+    by_proj, by_model = defaultdict(float), defaultdict(float)
     fallback = 0
     for s in sessions:
         by_proj[s["project"]] += s["cost"]
         for m in (s["models"] or {"unknown"}):
             by_model[m] += s["cost"] / max(1, len(s["models"]))
-        if s["ts_first"]:
-            by_day[s["ts_first"][:10]] += s["cost"]
         if not s["models"]:
             fallback += 1
 
@@ -690,6 +691,20 @@ def _dedup_sessions(sessions):
         elif s.get("accurate") and not by_key[key].get("accurate"):
             by_key[key] = s
     return [by_key[k] for k in order]
+
+
+def _accurate_basis(pool):
+    """Pick the calibration basis: the accurate runs that carry a usable (>0) cost signal
+    when >=5 exist, else the full pool (a FLOOR).
+
+    Gating on SIGNAL, not just count, is the point: an accurate harness run that errored or
+    produced no model usage is stamped accurate=True at $0 (see optimize/result.py). >=5 such
+    runs would otherwise flip to a 'calibrated' basis and report a confident $0.00 with the
+    floor caveat dropped -- inverting the tool's loudest promise. Used by both cmd_forecast
+    and cmd_estimate so the two stay in lock-step.
+    """
+    usable = [s for s in pool if s.get("accurate") and s.get("cost", 0) > 0]
+    return (usable, True) if len(usable) >= 5 else (pool, False)
 
 
 _MAX_COUNT = 100_000  # sprint/project sanity bound (caps Monte-Carlo work, prevents hangs)
@@ -860,8 +875,7 @@ def cmd_forecast(args):
     else:
         loaded = load(args.path) + load(runs)  # default/auto == today's behavior
     pool = _dedup_sessions(loaded)
-    accurate = [s for s in pool if s.get("accurate")]
-    sessions, accurate_basis = (accurate, True) if len(accurate) >= 5 else (pool, False)
+    sessions, accurate_basis = _accurate_basis(pool)
     if len(sessions) < 5:
         print("Need at least ~5 historical sessions to calibrate a forecast.")
         return
@@ -953,6 +967,13 @@ PlanTicket = namedtuple("PlanTicket", ["text", "files", "tools", "output"])
 # checkboxes) or an ordered-list marker (1. / 2) ). Headings, blanks, prose are ignored.
 _BULLET_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+(.*)$")
 _CHECKBOX_RE = re.compile(r"^\[[ xX]\]\s+(.*)$")
+
+
+def _is_thematic_break(s):
+    """A markdown horizontal rule: 3+ of the same -, *, or _ with optional spaces. The
+    SPACED forms ('- - -', '* * *') otherwise match _BULLET_RE and count as junk tickets."""
+    t = s.replace(" ", "").replace("\t", "")
+    return len(t) >= 3 and t[0] in "-*_" and t == t[0] * len(t)
 # Trailing parenthesised size hint, e.g. "(files=8 tools=30 output=4000)".
 _HINT_RE = re.compile(r"\s*\(([^()]*)\)\s*$")
 
@@ -1011,6 +1032,8 @@ def parse_plan(text):
             continue
         if in_fence:
             continue
+        if _is_thematic_break(stripped):
+            continue  # a '- - -' / '* * *' separator is not a ticket
         m = _BULLET_RE.match(raw)
         if not m:
             continue
@@ -1038,8 +1061,7 @@ def _estimate_pool(args):
     else:
         loaded = load(args.path) + load(getattr(args, "runs", "./runs"))
     pool = _dedup_sessions(loaded)
-    accurate = [s for s in pool if s.get("accurate")]
-    return (accurate, True) if len(accurate) >= 5 else (pool, False)
+    return _accurate_basis(pool)
 
 
 def cmd_estimate(args):

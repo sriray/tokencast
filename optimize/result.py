@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import tokencast
+from optimize import atomicio
 from optimize import pricing
 
 _BASE_EPOCH = 1_700_000_000  # fixed baseline so emitted timestamps are deterministic
@@ -122,7 +123,6 @@ class RunResult:
                                       "usage": dict(settle) if is_last else dict(zero)}})
         for ln in lines:
             ln["tokencast_accurate"] = True
-        with open(path, "w") as fh:
-            for ln in lines:
-                fh.write(json.dumps(ln) + "\n")
-        return path
+        # Atomic: a truncated run JSONL is silently read back by tokencast.py as a short,
+        # under-counted history that skews the forecast.
+        return atomicio.write_lines([json.dumps(ln) for ln in lines], path)

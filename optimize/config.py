@@ -36,6 +36,15 @@ class AgentConfig:
     budget_usd: Optional[float] = None
     max_turns: Optional[int] = None
 
+    def __post_init__(self):
+        # config_id flows into output paths (out_dir/<task>-<config_id>.jsonl) and can be
+        # generator-derived, so it must be a safe single path component -- no traversal.
+        cid = self.config_id
+        if cid in (".", "..") or cid != os.path.basename(cid) or os.path.isabs(cid):
+            raise ValueError(
+                f"config_id {cid!r} must be a safe path component "
+                "(no '/', '..', or absolute path)")
+
     @classmethod
     def load(cls, path):
         path = os.path.abspath(path)
@@ -162,5 +171,5 @@ class AgentConfig:
         if self.skills_source and os.path.isdir(self.skills_source):
             dest = os.path.join(path, "skills")
             if os.path.abspath(self.skills_source) != os.path.abspath(dest):
-                shutil.copytree(self.skills_source, dest, dirs_exist_ok=True)
+                shutil.copytree(self.skills_source, dest, symlinks=True, dirs_exist_ok=True)
         return path

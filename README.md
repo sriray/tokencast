@@ -295,6 +295,11 @@ A config dir mirrors Agent Optimizer's layout: `metadata.yaml` (model, budget, m
 and an optional `skills/` dir. Before any real spend the CLI prints a pre-flight cost estimate
 and asks you to confirm.
 
+> **Security note.** An eval set's `command` rule runs its `cmd` through the shell with your
+> user privileges (that's how it runs your real test suite). `eval init` can *draft* an eval set
+> with an LLM — treat that draft as untrusted and **read it before running**. File paths (task
+> ids, check paths) are confined to the sandbox; the shell command itself is not.
+
 `run` is the foundation; the full closed-loop optimizer is built on top of it — eval harness,
 cost-first ranking, failure-driven candidate generation, skills/MCP axes, and task decomposition,
 tied together by the `auto` command and the `/tokencast-optimize` skill (below). See

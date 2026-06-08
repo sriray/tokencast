@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from optimize import atomicio
 from optimize import scorer as scorer_mod
 from optimize import staging
 from optimize.candidates import _describe_dimension
@@ -232,6 +233,5 @@ def run_decompose(evalset, config, *, n=2, runner=None, judge=None, decomposer=N
             results.append({"task_id": task.id, "by": by, "floor": 0.0, "monolithic": None,
                             "strategies": [], "winner_label": None,
                             "cost_delta_pct": 0.0, "time_delta_pct": 0.0})
-    with open(os.path.join(out_dir, "decompose.json"), "w", encoding="utf-8") as fh:
-        json.dump(results, fh, indent=2)
+    atomicio.dump_json(results, os.path.join(out_dir, "decompose.json"))
     return results

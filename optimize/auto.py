@@ -2,9 +2,9 @@
 and (optionally) compares task decompositions on that winner, writing a combined auto.json.
 Pure glue over run_optimize / run_decompose; the forecast + confirmation live in the CLI."""
 import dataclasses
-import json
 import os
 
+from optimize import atomicio
 from optimize.config import AgentConfig
 from optimize.decompose import run_decompose
 from optimize.loop import run_optimize
@@ -37,6 +37,5 @@ def run_auto(baseline, evalset, *, runner=None, judge=None, generator=None, deco
     os.makedirs(out_dir, exist_ok=True)
     summary = {"winner_id": result.winner_id, "optimize": dataclasses.asdict(result),
                "decompose": decompose}
-    with open(os.path.join(out_dir, "auto.json"), "w", encoding="utf-8") as fh:
-        json.dump(summary, fh, indent=2)
+    atomicio.dump_json(summary, os.path.join(out_dir, "auto.json"))
     return {"winner_id": result.winner_id, "optimize": result, "decompose": decompose}

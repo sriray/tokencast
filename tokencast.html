@@ -541,6 +541,8 @@ function familyBest(json, fam){
     if(prov && prov!=="anthropic") continue;
     if(!k.toLowerCase().includes(fam)) continue;
     if(typeof v.input_cost_per_token!=="number"||typeof v.output_cost_per_token!=="number") continue;
+    if(v.input_cost_per_token<=0||v.output_cost_per_token<=0) continue;  // a 0/negative rate (free
+      // preview entries exist) would price a whole family at $0; keep the default instead
     if(!best || v.input_cost_per_token>best.input_cost_per_token) best=v;
   }
   return best;
