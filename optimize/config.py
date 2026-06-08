@@ -40,9 +40,9 @@ class AgentConfig:
         # config_id flows into output paths (out_dir/<task>-<config_id>.jsonl) and can be
         # generator-derived, so it must be a safe single path component -- no traversal.
         cid = self.config_id
-        if cid in (".", "..") or cid != os.path.basename(cid) or os.path.isabs(cid):
+        if not cid or cid in (".", "..") or cid != os.path.basename(cid) or os.path.isabs(cid):
             raise ValueError(
-                f"config_id {cid!r} must be a safe path component "
+                f"config_id {cid!r} must be a non-empty safe path component "
                 "(no '/', '..', or absolute path)")
 
     @classmethod

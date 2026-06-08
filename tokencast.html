@@ -479,7 +479,7 @@ function forecast(){
   const cweights=weights;
   const durObj=ranked.map((s,i)=>({d:s.duration_min,w:weights[i]})).filter(x=>x.d!=null);
   const durs=durObj.map(x=>x.d), dweights=durObj.map(x=>x.w);
-  const count=Math.max(1,parseInt(document.getElementById('f_count').value)||1);
+  const count=Math.min(100000,Math.max(1,parseInt(document.getElementById('f_count').value)||1));  // cap (py _MAX_COUNT) -> no tab hang
 
   let html =
     `<div style="margin-bottom:6px;"><b>Per task</b></div>`+

@@ -76,13 +76,13 @@ def test_report_survives_zero_total_cost(tmp_path, capsys):
     assert "By project" in out
 
 
-# --- G: dedup prefers the accurate copy on a key collision ------------------
+# --- G: dedup prefers the accurate copy (with a usable cost) on a key collision -----
 def test_dedup_prefers_accurate_copy():
-    inacc = {"project": "p", "session": "s", "accurate": False}
-    acc = {"project": "p", "session": "s", "accurate": True}
+    inacc = {"project": "p", "session": "s", "cost": 2.0, "accurate": False}
+    acc = {"project": "p", "session": "s", "cost": 5.0, "accurate": True}
     out = tokencast._dedup_sessions([inacc, acc])
     assert len(out) == 1
-    assert out[0]["accurate"] is True
+    assert out[0]["accurate"] is True   # a real ($X) accurate run wins over the floor copy
 
 
 # --- G: budget rejects non-finite caps --------------------------------------

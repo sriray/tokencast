@@ -141,9 +141,12 @@ def _num(x):
     """Token/count fields must be numbers; anything else (str, list, None, bool) -> 0.
 
     Guards the parsers against a malformed JSONL value silently crashing (and thereby
-    dropping) an entire otherwise-valid session.
+    dropping) an entire otherwise-valid session. Non-finite (inf/NaN -- json.loads accepts
+    bare Infinity/NaN) is rejected too, else one bad value makes every percentile inf/nan
+    (matches the browser tool's `num`, which already required isFinite).
     """
-    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else 0
+    return x if (isinstance(x, (int, float)) and not isinstance(x, bool)
+                 and math.isfinite(x)) else 0
 
 
 def _valid_cost(v):
@@ -182,7 +185,7 @@ def _new_summary(session, project):
 def _track_ts(s, ts):
     """Record first/last timestamps by CHRONOLOGICAL epoch, not lexical string order.
 
-    Keeps the raw string (report slices ts_first[:10] for by-day grouping) but decides
+    Keeps the raw string (budget slices ts_first[:10] for its period date) but decides
     earliest/latest by parsed epoch -- robust to mixed tz offsets, naive vs aware, and
     numeric-vs-string timestamps (which previously crashed min()/max()).
     """
@@ -688,7 +691,11 @@ def _dedup_sessions(sessions):
         if key not in by_key:
             by_key[key] = s
             order.append(key)
-        elif s.get("accurate") and not by_key[key].get("accurate"):
+        elif (s.get("accurate") and s.get("cost", 0) > 0
+              and not by_key[key].get("accurate")):
+            # Prefer an accurate copy ONLY when it carries a usable cost signal: a failed
+            # harness run is stamped accurate=True at $0, and must not evict a real floor
+            # ($X) copy of the same session (which would silently undercount the floor pool).
             by_key[key] = s
     return [by_key[k] for k in order]
 

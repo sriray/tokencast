@@ -19,9 +19,13 @@ def _write(path, rows):
 # --- BUG-1: distance weighting must affect the largest point too -------------
 def test_weighted_pct_top_weight_is_not_ignored():
     vals = [10.0, 100.0, 1000.0]
+    equal = tokencast.pct(vals, 0.9)                                   # top neighbor at full weight
     light_top = tokencast._weighted_pct(vals, [1.0, 1.0, 0.01], 0.9)   # down-weight 1000
     heavy_top = tokencast._weighted_pct(vals, [1.0, 1.0, 100.0], 0.9)  # up-weight 1000
-    assert heavy_top > light_top, "the largest neighbor's weight must change p90"
+    # The buggy form left p90 FLAT at `equal` regardless of the top weight (an old strict `>`
+    # squeaked through on a ~1e-13 fp artifact). Assert the weight MATERIALLY moves p90 both ways.
+    assert light_top < equal - 1.0, "down-weighting the largest neighbor must lower p90"
+    assert heavy_top > equal + 1.0, "up-weighting the largest neighbor must raise p90"
 
 
 def test_weighted_pct_still_reduces_to_pct_for_equal_weights():
@@ -538,3 +542,88 @@ def test_scale_clamps_negative_token_value():
     assert tokencast._scale(-50, "output") == 0.0     # was math domain ValueError via log1p
     assert tokencast._scale(-1, "files_touched") == 0.0
     assert round(tokencast._scale(100, "output"), 3) == 4.615   # positive unchanged
+
+
+# =============================================================================
+# Wave 8 — meta-review (fixes to the fixes + coverage the audit found missing):
+#   W8-1  _num rejects non-finite (inf/NaN) so one bad value can't poison every percentile
+#   W8-2  dedup must not let a failed $0 accurate run evict a real $X floor session
+#   W8-3  an empty config_id is rejected (it collapses path components)
+#   W8-4  task_sandbox preserves seed-dir symlinks (the untested sibling of W6-6)
+#   W8-5  atomic writes are actually atomic on a mid-write failure (not just temp-free)
+#   W8-6  atomicio.write_lines roundtrips (incl. the empty case)
+# =============================================================================
+def test_num_rejects_nonfinite():
+    assert tokencast._num(float("inf")) == 0 and tokencast._num(float("nan")) == 0
+    assert tokencast._num(5) == 5 and tokencast._num(2.5) == 2.5
+
+
+def test_infinite_usage_does_not_poison_cost(tmp_path):
+    row = {"type": "assistant", "timestamp": "2026-04-10T00:00:00Z",
+           "message": {"role": "assistant", "model": "claude-sonnet-4-6",
+                       "usage": {"output_tokens": float("inf"), "input_tokens": 0,
+                                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}
+    p = tmp_path / "proj" / "s.jsonl"
+    p.parent.mkdir(parents=True)
+    _write(p, [row])                                   # json.dumps writes bare Infinity
+    sessions = tokencast.load(str(tmp_path))
+    assert len(sessions) == 1
+    assert math.isfinite(sessions[0]["cost"]) and sessions[0]["cost"] == 0.0
+
+
+def test_dedup_keeps_floor_cost_over_failed_accurate():
+    floor = {"session": "dup", "project": "p", "cost": 4.0, "accurate": False}
+    failed = {"session": "dup", "project": "p", "cost": 0.0, "accurate": True}
+    out = tokencast._dedup_sessions([floor, failed])    # floor first (real logs), failed run after
+    assert len(out) == 1 and out[0]["cost"] == 4.0      # $0 accurate must NOT evict the $X floor
+    good = {"session": "dup", "project": "p", "cost": 9.0, "accurate": True}
+    out2 = tokencast._dedup_sessions([floor, good])     # a real ($X) accurate copy still wins
+    assert out2[0]["cost"] == 9.0 and out2[0]["accurate"] is True
+
+
+def test_config_rejects_empty_config_id():
+    with pytest.raises(ValueError, match="safe path component"):
+        AgentConfig(config_id="", model="sonnet")
+
+
+def test_task_sandbox_preserves_seed_symlinks_no_deref(tmp_path):
+    from optimize.sandbox import task_sandbox
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "leak").symlink_to(secret)
+
+    class _T:                                           # minimal task stand-in
+        seed_repo = None
+        seed_dir = str(seed)
+
+    with task_sandbox(_T()) as cwd:
+        staged = os.path.join(cwd, "leak")
+        assert os.path.islink(staged)                   # preserved, not a copy of the secret bytes
+        assert os.path.realpath(staged) == os.path.realpath(str(secret))
+
+
+def test_atomicio_is_atomic_on_write_failure(tmp_path):
+    from optimize import atomicio
+    p = tmp_path / "out.json"
+    atomicio.dump_json({"v": 1}, str(p))                # establish a good prior file
+
+    def _boom(fh):
+        fh.write("partial")                             # a naive direct-write impl would truncate p
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        atomicio._replace_from_tmp(str(p), _boom)
+    assert json.loads(p.read_text()) == {"v": 1}        # original intact (os.replace never ran)
+    assert not list(tmp_path.glob(".tmp-*"))            # temp cleaned up
+
+
+def test_atomicio_write_lines_roundtrip(tmp_path):
+    from optimize import atomicio
+    p = tmp_path / "x.jsonl"
+    atomicio.write_lines(['{"a":1}', '{"b":2}'], str(p))
+    assert p.read_text() == '{"a":1}\n{"b":2}\n'
+    e = tmp_path / "empty.jsonl"
+    atomicio.write_lines([], str(e))
+    assert e.read_text() == ""

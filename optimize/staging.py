@@ -15,8 +15,9 @@ def stage_skills(config, cwd):
     for name in os.listdir(src):
         s = os.path.join(src, name)
         d = os.path.join(dest, name)
-        # Preserve symlinks as symlinks (don't dereference) -- a poisoned skills dir could
-        # otherwise copy a secret file's contents into the agent-readable sandbox.
+        # Preserve symlinks as symlinks (don't dereference) so a poisoned skills dir doesn't
+        # bake a secret file's contents into the sandbox / persisted artifacts. Defense-in-depth
+        # only: an absolute link is still readable through at run time.
         if os.path.islink(s):
             if not os.path.lexists(d):
                 os.symlink(os.readlink(s), d)

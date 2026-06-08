@@ -9,14 +9,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 
-def _safe_component(value, field):
+def _safe_component(value, label):
     """Reject a value that isn't a safe single path component. Task ids (and config ids)
-    flow into output paths like out_dir/<id>-<config>.jsonl; an id of '../../etc/x' or an
-    absolute path would write OUTSIDE out_dir. Eval sets can be LLM-generated, so this input
-    is partially untrusted."""
-    if value in (".", "..") or value != os.path.basename(value) or os.path.isabs(value):
+    flow into output paths like out_dir/<id>-<config>.jsonl; an id of '../../etc/x', an
+    absolute path, or an empty string (which collapses the path) would escape/alias out_dir.
+    Eval sets can be LLM-generated, so this input is partially untrusted."""
+    if not value or value in (".", "..") or value != os.path.basename(value) or os.path.isabs(value):
         raise ValueError(
-            f"{field} {value!r} must be a safe path component (no '/', '..', or absolute path)")
+            f"{label} {value!r} must be a safe path component (no '/', '..', or absolute path)")
     return value
 
 try:

@@ -41,9 +41,10 @@ def task_sandbox(task):
             for name in os.listdir(src):
                 s = os.path.join(src, name)
                 t = os.path.join(d, name)
-                # Preserve symlinks as symlinks (don't dereference): a seed dir is partially
-                # untrusted, and a link like leak -> ~/.aws/credentials would otherwise copy
-                # the secret's CONTENTS into the agent-readable sandbox.
+                # Preserve symlinks as symlinks (don't dereference) so a link like
+                # leak -> ~/.aws/credentials doesn't bake the secret's CONTENTS into the copied
+                # tree / persisted run artifacts. Defense-in-depth only: an absolute link is
+                # still readable THROUGH at run time -- don't point a sandbox at an untrusted seed.
                 if os.path.islink(s):
                     os.symlink(os.readlink(s), t)
                 elif os.path.isdir(s):
