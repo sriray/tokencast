@@ -324,3 +324,99 @@ def test_optimize_max_spend_stops_before_candidates(tmp_path):
     res = run_optimize(baseline, cands, es, runner=_runner_1k, judge=lambda p: 1.0,
                        out_dir=str(tmp_path / "runs"), max_spend=0.001)
     assert res.winner_id == baseline.config_id   # only baseline evaluated
+
+
+# =============================================================================
+# Wave 5 — under-reviewed surfaces (budget.py + optimize/{ranking,config,evalset}):
+#   W5-1  budget project scope must match real mangled-path project names
+#   W5-2  a run in both real logs and ./runs must not double-count
+#   W5-3  a zero-cost (failed) config is not a Pareto frontier point
+#   W5-4  a task with no dimensions is rejected (else 0.0-threshold "passes")
+#   W5-5  a non-positive check timeout is rejected (else the check never passes)
+#   W5-6  config.save round-trips skills_source (else the winner loses its skills)
+# =============================================================================
+import os
+
+from budget import SpendRecord, collect_spend, _in_scope
+from optimize.ranking import CandidateResult, pareto, select
+from optimize.evalset import Check
+
+
+def _spend_row(output_tokens):
+    return {"type": "assistant", "timestamp": "2026-04-10T00:00:00Z",
+            "message": {"role": "assistant", "model": "claude-sonnet-4-6",
+                        "content": [{"type": "text", "text": "x"}],
+                        "usage": {"input_tokens": 0, "output_tokens": output_tokens,
+                                  "cache_creation_input_tokens": 0,
+                                  "cache_read_input_tokens": 100000}}}
+
+
+# --- W5-1: project scope matches the mangled-path project name ---------------
+def test_budget_project_scope_matches_mangled_path():
+    rec = SpendRecord(cost=1.0, project="-Users-me-dev-startups-tokencast",
+                      date=None, source="real")
+    assert _in_scope(rec, "project:tokencast") is True            # the documented form works
+    assert _in_scope(SpendRecord(1.0, "demo-project", None, "real"),
+                     "project:demo-project") is True              # exact still matches
+
+
+def test_budget_project_scope_no_partial_word_match():
+    rec = SpendRecord(cost=1.0, project="-Users-me-tokencast", date=None, source="real")
+    assert _in_scope(rec, "project:cast") is False                # boundary guard, no false hit
+    assert _in_scope(rec, "project:other") is False
+
+
+# --- W5-2: same session in both real logs and ./runs collapses to accurate ----
+def test_collect_spend_dedups_cross_source_session(tmp_path):
+    real = tmp_path / "real" / "sandbox"
+    real.mkdir(parents=True)
+    runs = tmp_path / "runs" / "measured"
+    runs.mkdir(parents=True)
+    _write(real / "dup.jsonl", [_spend_row(1000)])   # same session id (filename) in both trees
+    _write(runs / "dup.jsonl", [_spend_row(2000)])
+    records = collect_spend(str(tmp_path / "real"), str(tmp_path / "runs"))
+    assert len(records) == 1                          # collapsed, not double-counted
+    assert records[0].source == "tokencast"           # the accurate copy wins
+
+
+# --- W5-3: a zero-cost (failed) config is excluded from the Pareto front ------
+def _cand(cid, quality, cost):
+    return CandidateResult(config_id=cid, quality=quality, pass_rate=1.0, cost_usd=cost,
+                           duration_ms=1000.0, repeats=1, cost_min=cost, cost_max=cost,
+                           quality_min=quality, quality_max=quality)
+
+
+def test_pareto_excludes_zero_cost_failed_config():
+    base, good, failed = _cand("base", 0.9, 0.05), _cand("good", 0.95, 0.08), _cand("failed", 0.0, 0.0)
+    front = pareto([base, good, failed])
+    assert "failed" not in front and set(front) == {"base", "good"}
+    winner, _ = select([base, good, failed], "base", 0.9)
+    assert winner != "failed"
+
+
+# --- W5-4: a task with no dimensions is rejected -----------------------------
+def test_evalset_rejects_task_with_no_dimensions():
+    with pytest.raises(ValueError, match="at least one dimension"):
+        EvalSet.from_dict({"tasks": [{"id": "empty", "prompt": "do nothing",
+                                      "pass_threshold": 0.0, "dimensions": []}]})
+
+
+# --- W5-5: a non-positive check timeout is rejected --------------------------
+def test_check_rejects_nonpositive_timeout():
+    with pytest.raises(ValueError, match="timeout must be > 0"):
+        Check.from_dict({"kind": "command", "cmd": "true", "timeout": 0})
+
+
+# --- W5-6: save() round-trips skills_source so a reloaded winner keeps skills --
+def test_config_save_roundtrips_skills_source(tmp_path):
+    pytest.importorskip("yaml")
+    src = tmp_path / "skillset"
+    (src / "demo").mkdir(parents=True)
+    (src / "demo" / "SKILL.md").write_text("# demo skill\n")
+    cfg = AgentConfig(config_id="winner", model="sonnet",
+                      skills_source=str(src), skills=["demo"])
+    dest = tmp_path / "promoted"
+    cfg.save(str(dest))
+    back = AgentConfig.load(str(dest))
+    assert back.skills_source == os.path.join(str(dest), "skills")
+    assert os.path.exists(os.path.join(str(dest), "skills", "demo", "SKILL.md"))

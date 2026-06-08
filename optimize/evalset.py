@@ -35,9 +35,13 @@ class Check:
             raise ValueError(f"{kind} check requires 'path'")
         if kind == "file_contains" and not d.get("pattern"):
             raise ValueError("file_contains check requires 'pattern'")
+        timeout = int(d.get("timeout", 120))
+        if timeout <= 0:
+            # timeout=0 makes communicate(timeout=0) fire immediately, so the check can never
+            # pass -- a required command rule with it would fail the task unconditionally.
+            raise ValueError(f"{kind} check: timeout must be > 0 seconds, got {timeout}")
         return cls(kind=kind, cmd=d.get("cmd"), expect_exit=int(d.get("expect_exit", 0)),
-                   path=d.get("path"), pattern=d.get("pattern"),
-                   timeout=int(d.get("timeout", 120)))
+                   path=d.get("path"), pattern=d.get("pattern"), timeout=timeout)
 
     def to_dict(self):
         out = {"kind": self.kind}
@@ -131,7 +135,11 @@ class EvalTask:
             raise ValueError(
                 f"task {d['id']!r}: pass_threshold must be between 0 and 1, got {threshold}")
         dims = [Dimension.from_dict(x) for x in (d.get("dimensions") or [])]
-        if dims and sum(dim.weight for dim in dims) == 0:
+        if not dims:
+            # A task with no dimensions scores composite 0.0 with required_ok=all([])=True,
+            # so pass_threshold 0.0 would silently "pass" a config that did nothing.
+            raise ValueError(f"task {d['id']!r}: requires at least one dimension")
+        if sum(dim.weight for dim in dims) == 0:
             raise ValueError(f"task {d['id']!r}: dimension weights sum to 0")
         return cls(id=d["id"], prompt=d["prompt"], pass_threshold=threshold,
                    dimensions=dims, seed_dir=d.get("seed_dir"), seed_repo=seed_repo)

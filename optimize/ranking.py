@@ -88,12 +88,16 @@ def select(candidates, baseline_id, floor, by="cost"):
 
 
 def pareto(candidates):
+    # cost_usd == 0 means the eval did not actually run (all tasks failed); like select(), such
+    # a config is never a valid frontier point -- otherwise it is non-dominated on cost and
+    # sorts to the TOP of the table as a bogus "free" win.
+    eligible = [c for c in candidates if c.cost_usd > 0]
     front = []
-    for a in candidates:
+    for a in eligible:
         dominated = any(
             b is not a and b.cost_usd <= a.cost_usd and b.quality >= a.quality
             and (b.cost_usd < a.cost_usd or b.quality > a.quality)
-            for b in candidates)
+            for b in eligible)
         if not dominated:
             front.append(a.config_id)
     return front

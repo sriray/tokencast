@@ -13,6 +13,7 @@ module never imports the SDK and stays unit-testable.
 """
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -155,4 +156,11 @@ class AgentConfig:
                 json.dump(tools, fh, indent=2)
         elif os.path.exists(tools_path):
             os.remove(tools_path)
+        # Persist the skills payload so load() re-detects skills_source. Without this a saved
+        # winner reloaded (e.g. auto.py's decompose pass) loses skills_source, and stage_skills
+        # then stages nothing -- the run executes without the winner's bundled skills.
+        if self.skills_source and os.path.isdir(self.skills_source):
+            dest = os.path.join(path, "skills")
+            if os.path.abspath(self.skills_source) != os.path.abspath(dest):
+                shutil.copytree(self.skills_source, dest, dirs_exist_ok=True)
         return path
