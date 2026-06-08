@@ -124,9 +124,13 @@ def refresh_prices(verbose=True):
 
 def price_for(model):
     m = (model or "").lower()
-    for key in PRICING:
-        if key in m:
-            return PRICING[key], key
+    # If an id mentions more than one family, price by the one that appears FIRST in the
+    # id (e.g. a "claude-sonnet-..." id that happens to contain "opus" prices as Sonnet),
+    # not by PRICING's dict order, which could overcharge up to 5x.
+    matches = [(m.index(key), key) for key in PRICING if key in m]
+    if matches:
+        key = min(matches)[1]
+        return PRICING[key], key
     return PRICING["sonnet"], "sonnet?"  # fallback; flagged in output
 
 
@@ -245,7 +249,9 @@ def reduce_entries(entries, session, project):
 def _read_entries(path):
     """Read a JSONL transcript into a list of parsed dicts, skipping unparseable lines."""
     entries = []
-    with open(path, "r", errors="ignore") as fh:
+    # utf-8-sig strips a leading BOM (else json.loads chokes on the first line and the
+    # whole session is silently dropped); errors="ignore" tolerates stray bad bytes.
+    with open(path, "r", encoding="utf-8-sig", errors="ignore") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -520,16 +526,32 @@ def read_file(path, fmt="auto"):
     """Read ONE log file into session summaries using the chosen (or auto-detected) reader.
 
     Never raises on a foreign/empty file: returns []. The loader filters assistant_turns==0.
+    In auto mode, if the sniffed reader extracts no assistant turns from a non-empty file,
+    fall back to the other readers -- so an ambiguous envelope, or a generic file whose
+    first lines are headers, isn't silently read as $0 by the wrong reader.
     """
-    name = _sniff_format(path) if fmt == "auto" else fmt
-    reader = READERS.get(name)
-    if reader is None:
-        return []
-    try:
-        return reader[0](path) or []
-    except Exception as ex:
-        print(f"  ! skipped {path}: {ex}", file=sys.stderr)
-        return []
+    if fmt != "auto":
+        reader = READERS.get(fmt)
+        if reader is None:
+            return []
+        try:
+            return reader[0](path) or []
+        except Exception as ex:
+            print(f"  ! skipped {path}: {ex}", file=sys.stderr)
+            return []
+    primary = _sniff_format(path)
+    order = [primary] + [n for n in READERS if n != primary]
+    fallback = []
+    for name in order:
+        try:
+            sessions = READERS[name][0](path) or []
+        except Exception as ex:
+            print(f"  ! skipped {path} via {name}: {ex}", file=sys.stderr)
+            sessions = []
+        if any(s.get("assistant_turns", 0) > 0 for s in sessions):
+            return sessions
+        fallback = fallback or sessions
+    return fallback
 
 
 def load_with_format(root, fmt="auto"):
@@ -975,7 +997,20 @@ def parse_plan(text):
     from the ticket text. See the module-level rule + the design spec.
     """
     tickets = []
+    in_fence, fence = False, None
     for raw in text.splitlines():
+        stripped = raw.lstrip()
+        # Skip fenced code blocks (``` or ~~~) so a pasted shell/diff snippet whose lines
+        # start with '-' doesn't get counted as tickets and inflate the sprint total.
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence, fence = True, marker
+            elif stripped.startswith(fence):
+                in_fence, fence = False, None
+            continue
+        if in_fence:
+            continue
         m = _BULLET_RE.match(raw)
         if not m:
             continue

@@ -196,3 +196,45 @@ def test_budget_rejects_nonfinite_per_task(tmp_path):
 def test_budget_rejects_negative_forecast(tmp_path):
     with pytest.raises(SystemExit):
         tokencast.cmd_budget(_bargs(_budget_cfg(tmp_path), tmp_path, forecast=-50.0))
+
+
+# ===========================================================================
+# Wave 3 -- parser robustness (GAP-4 fences, S6 BOM, S7 sniffer, S8 pricing)
+# ===========================================================================
+def test_parse_plan_ignores_fenced_bullets():
+    text = "- real one\n```\n- fenced\n- fenced two\n```\n- real two\n"
+    assert [t.text for t in tokencast.parse_plan(text)] == ["real one", "real two"]
+
+
+def test_parse_plan_ignores_tilde_fences():
+    text = "- a\n~~~sh\n- not a ticket\n~~~\n- b\n"
+    assert [t.text for t in tokencast.parse_plan(text)] == ["a", "b"]
+
+
+def test_parse_session_handles_utf8_bom(tmp_path):
+    p = tmp_path / "bom.jsonl"
+    line = json.dumps({"type": "assistant", "message": {"role": "assistant",
+            "model": "sonnet", "content": [],
+            "usage": {"input_tokens": 1000, "output_tokens": 500}}})
+    p.write_bytes(b"\xef\xbb\xbf" + line.encode("utf-8") + b"\n")
+    sess = tokencast.parse_session(str(p))
+    assert sess["assistant_turns"] == 1 and sess["output"] == 500
+
+
+def test_auto_falls_back_when_primary_reader_extracts_nothing(tmp_path):
+    # message envelope but usage at TOP level: claude-code reads $0; auto must fall back
+    # to the generic reader instead of silently reporting nothing.
+    p = tmp_path / "amb.jsonl"
+    _write(p, [{"type": "assistant", "message": {"role": "assistant"},
+                "model": "claude-opus-4-8",
+                "usage": {"input_tokens": 3000, "output_tokens": 50000}}
+               for _ in range(6)])
+    sessions = tokencast.load_with_format(str(p), "auto")
+    assert sessions and sessions[0]["output"] == 300000
+
+
+def test_price_for_two_family_id_picks_earliest():
+    _, key = tokencast.price_for("claude-sonnet-but-also-opus")
+    assert key == "sonnet"
+    _, key2 = tokencast.price_for("haiku-then-opus-blend")
+    assert key2 == "haiku"

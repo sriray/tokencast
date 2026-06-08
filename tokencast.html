@@ -165,8 +165,11 @@ function pricing(){
 const FILE_TOOLS = new Set(["Edit","Write","Read","MultiEdit","NotebookEdit"]);
 function priceFor(model,P){
   const m=(model||"").toLowerCase();
-  for(const k of Object.keys(P.models)) if(m.includes(k)) return P.models[k];
-  return P.models.sonnet;
+  // If an id mentions more than one family, price by the one that appears first in the id
+  // (mirrors tokencast.py price_for), not by object key order.
+  let best=null, bestIdx=Infinity;
+  for(const k of Object.keys(P.models)){ const i=m.indexOf(k); if(i>=0 && i<bestIdx){ best=k; bestIdx=i; } }
+  return best ? P.models[best] : P.models.sonnet;
 }
 // Token/count fields must be finite numbers; anything else (string, undefined, ...) -> 0.
 function num(x){ return (typeof x==="number" && isFinite(x)) ? x : 0; }
