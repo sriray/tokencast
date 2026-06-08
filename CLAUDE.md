@@ -98,8 +98,9 @@ token source. See ROADMAP.md.
 
 **Partially addressed:** the optimizer tier measures runs accurately and stamps a
 `tokencast_accurate` marker into its JSONL; `forecast` (CLI + HTML) now prefers those accurate runs
-(≥5 → calibrated, floor caveat dropped) over the undercounted history, deduping the pool and
-labeling the basis. Pure Claude-Code-log forecasts remain a floor until a provider token API lands.
+(≥5 with a usable >0-cost signal → calibrated, floor caveat dropped) over the undercounted history,
+deduping the pool and labeling the basis. Pure Claude-Code-log forecasts remain a floor until a
+provider token API lands.
 
 ## Evidence base (verified)
 

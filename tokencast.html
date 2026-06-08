@@ -164,7 +164,7 @@ function pricing(){
 }
 const FILE_TOOLS = new Set(["Edit","Write","Read","MultiEdit","NotebookEdit"]);
 function priceFor(model,P){
-  const m=(model||"").toLowerCase();
+  const m=(typeof model==="string"?model:"").toLowerCase();  // non-string model id -> fallback
   // If an id mentions more than one family, price by the one that appears first in the id
   // (mirrors tokencast.py price_for), not by object key order.
   let best=null, bestIdx=Infinity;
@@ -199,7 +199,11 @@ function reduceEntries(entries, name, project, P){
     }
     const msg=e.message||{};
     if(e.type==="assistant" || msg.role==="assistant"){
-      const u=msg.usage; const model=msg.model||e.model;
+      // usage must be a non-empty plain object to count as an assistant turn (mirrors
+      // tokencast.py's isinstance(dict)+truthiness guard); a string/array/number must not.
+      const um=msg.usage;
+      const u=(um && typeof um==="object" && !Array.isArray(um) && Object.keys(um).length) ? um : null;
+      const model=msg.model||e.model;
       if(u){
         s.assistant_turns++; s.output+=num(u.output_tokens); s.cache_read+=num(u.cache_read_input_tokens);
         if(model) s.models.add(model);
@@ -283,7 +287,7 @@ function mc(arr,count,trials){ const out=[]; for(let t=0;t<trials;t++){ let s=0;
 // log-scaled skewed features incl. cache_read, adaptive k, neighbor-spread label) ----------
 const LOG_FEATURES=new Set(["output","tool_calls","cache_read"]);
 function fcFeatures(){ return ["files_touched","tool_calls","output","assistant_turns","cache_read"]; }
-function fcScale(v,f){ v=v||0; return LOG_FEATURES.has(f)?Math.log1p(v):v; }
+function fcScale(v,f){ v=(v>0)?v:0; return LOG_FEATURES.has(f)?Math.log1p(v):v; }  // clamp neg -> no NaN
 function adaptiveK(n){ return Math.max(5, Math.floor(n/4)); }
 function median(a){ const x=[...a].sort((p,q)=>p-q); if(!x.length) return 0; const m=Math.floor(x.length/2);
   return x.length%2?x[m]:(x[m-1]+x[m])/2; }
@@ -385,7 +389,7 @@ function render(){
     ['Total spend', money(total)],
     ['Median / task', money(pct(costs,.5))],
     ['p90 / task', money(pct(costs,.9))],
-    ['Worst task', money(Math.max(...costs))],
+    ['Worst task', money(costs.reduce((a,b)=>b>a?b:a,0))],
   ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
 
   // by model / project
@@ -426,10 +430,10 @@ function render(){
 
 function drawHist(costs){
   const W=880,H=240,pad=34, n=14;
-  const max=Math.max(...costs, 0.0001);
-  const bins=new Array(n).fill(0);
+  const max=costs.reduce((a,b)=>b>a?b:a,0.0001);   // reduce (not Math.max spread) -> no
+  const bins=new Array(n).fill(0);                  // RangeError on 100k+-task datasets
   costs.forEach(c=>{ let i=Math.min(n-1,Math.floor(c/max*n)); bins[i]++; });
-  const bmax=Math.max(...bins,1);
+  const bmax=bins.reduce((a,b)=>b>a?b:a,1);
   const bw=(W-pad*2)/n;
   let svg=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#ccc"/>`;
   for(let i=0;i<n;i++){
@@ -460,7 +464,9 @@ function updateCap(){
 }
 
 function forecast(){
-  const accurate=SESSIONS.filter(s=>s.accurate);
+  // gate on a usable (>0) cost signal, not just accurate-count, so >=5 failed/$0 runs don't
+  // flip to a calibrated $0 with the floor caveat dropped (mirrors tokencast.py _accurate_basis)
+  const accurate=SESSIONS.filter(s=>s.accurate && s.cost>0);
   const accurateBasis=accurate.length>=5;
   const basis=accurateBasis?accurate:SESSIONS;
   if(basis.length<5){ document.getElementById('forecastOut').innerHTML=

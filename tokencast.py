@@ -126,7 +126,7 @@ def refresh_prices(verbose=True):
 
 
 def price_for(model):
-    m = (model or "").lower()
+    m = (model if isinstance(model, str) else "").lower()  # non-string model id -> fallback
     # If an id mentions more than one family, price by the one that appears FIRST in the
     # id (e.g. a "claude-sonnet-..." id that happens to contain "opus" prices as Sonnet),
     # not by PRICING's dict order, which could overcharge up to 5x.
@@ -761,6 +761,8 @@ def _forecast_features():
 def _scale(value, feature):
     """Per-feature coordinate transform: log1p for skewed features, identity otherwise."""
     v = value or 0
+    if v < 0:
+        v = 0  # a negative token/count is malformed; clamp so log1p doesn't ValueError
     return math.log1p(v) if feature in _LOG_FEATURES else float(v)
 
 
@@ -1258,7 +1260,9 @@ def cmd_demo(args):
                                              "cache_read_input_tokens": cache_read}}}
                 fh.write(json.dumps(rec) + "\n")
     print(f"Wrote {args.sessions} synthetic sessions to {out}/demo-project/")
-    print(f"Now run:  python {os.path.basename(__file__)} report {out}")
+    prog = os.path.basename(sys.argv[0] or "")
+    invoke = prog if prog and not prog.endswith(".py") else f"python {os.path.basename(__file__)}"
+    print(f"Now run:  {invoke} report {out}")
 
 
 def _iso(epoch):

@@ -520,3 +520,21 @@ def test_atomicio_dump_json_roundtrips_no_temp_left(tmp_path):
 def test_parse_plan_skips_thematic_breaks():
     plan = "- real ticket one\n- - -\n* * *\n- real ticket two\n"
     assert [t.text for t in tokencast.parse_plan(plan)] == ["real ticket one", "real ticket two"]
+
+
+# =============================================================================
+# Wave 7 — parser/robustness parity with the browser tool (shared .py<->.html fixes):
+#   W7-1  a non-string model id must not crash pricing (fallback)
+#   W7-2  a negative token field must not crash forecast scaling (clamp, not ValueError)
+# =============================================================================
+def test_price_for_non_string_model_falls_back():
+    for bad in (42, ["x"], True, {"a": 1}):
+        prices, key = tokencast.price_for(bad)        # must not raise AttributeError
+        assert key == "sonnet?" and prices is tokencast.PRICING["sonnet"]
+    assert tokencast.price_for("claude-opus-4")[1] == "opus"   # real id still works
+
+
+def test_scale_clamps_negative_token_value():
+    assert tokencast._scale(-50, "output") == 0.0     # was math domain ValueError via log1p
+    assert tokencast._scale(-1, "files_touched") == 0.0
+    assert round(tokencast._scale(100, "output"), 3) == 4.615   # positive unchanged

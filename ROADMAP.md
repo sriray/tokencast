@@ -56,9 +56,9 @@ skill drives the whole machine conversationally — code for the deterministic p
 scoring, ranking), the LLM for judgment (eval-set drafting, axis choice, interpretation).
 
 **Accuracy bridge — done (light tier).** The harness stamps a `tokencast_accurate` marker into the
-JSONL it writes; `forecast` now pools history + `./runs`, prefers the accurate runs when ≥5 exist
-(calibrating on real token counts and dropping the floor caveat), and labels which basis it used —
-in both `tokencast.py` and `tokencast.html`. The remaining accuracy path is the provider Usage &
+JSONL it writes; `forecast` now pools history + `./runs`, prefers the accurate runs when ≥5 carry a
+usable (>0) cost signal (calibrating on real token counts and dropping the floor caveat), and labels
+which basis it used — in both `tokencast.py` and `tokencast.html`. The remaining accuracy path is the provider Usage &
 Cost API for pure Claude-Code-log forecasts.
 
 ## 2. Better task segmentation
