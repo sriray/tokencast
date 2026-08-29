@@ -132,6 +132,7 @@ class SpendRecord:
     project: str
     date: Optional[datetime.date]
     source: str          # "real" | "tokencast"
+    session: str = ""
 
 
 def _records_from(path, source):
@@ -147,20 +148,43 @@ def _records_from(path, source):
             except ValueError:
                 d = None
         out.append(SpendRecord(cost=s.get("cost", 0.0), project=s.get("project", ""),
-                               date=d, source=source))
+                               date=d, source=source, session=s.get("session", "")))
     return out
 
 
 def collect_spend(real_logs, runs):
-    """Combined, source-tagged spend records from real Claude Code usage + TokenCast runs."""
-    return _records_from(real_logs, "real") + _records_from(runs, "tokencast")
+    """Combined, source-tagged spend records from real Claude Code usage + TokenCast runs.
+
+    A run measured by the optimizer tier can land in BOTH the real logs and ./runs under the
+    same session id; collapse those to the accurate (tokencast) copy so the ledger is not
+    double-counted (mirrors forecast's session dedup). Records without a session id are never
+    collapsed.
+    """
+    records = _records_from(real_logs, "real") + _records_from(runs, "tokencast")
+    index, out = {}, []
+    for r in records:
+        if not r.session:
+            out.append(r)
+            continue
+        if r.session not in index:
+            index[r.session] = len(out)
+            out.append(r)
+        elif r.source == "tokencast" and out[index[r.session]].source != "tokencast":
+            out[index[r.session]] = r   # prefer the accurate copy
+    return out
 
 
 def _in_scope(record, scope):
     if scope == "global":
         return True
     if scope.startswith("project:"):
-        return record.project == scope.split(":", 1)[1]
+        name = scope.split(":", 1)[1]
+        proj = record.project
+        # Real Claude Code logs name a project by its MANGLED absolute path
+        # (e.g. "-Users-me-dev-tokencast"), so an exact "tokencast" would never match and the
+        # scope would silently consume nothing. Accept an exact match OR a trailing path
+        # segment ("...-tokencast"), which makes the documented `project:<name>` form work.
+        return proj == name or proj.endswith("-" + name)
     return False
 
 

@@ -159,7 +159,8 @@ reliable). So TokenCast's absolute numbers are a **floor**, and the tool flags t
 
 Once you run tasks through the optimizer tier (`tokencast-optimize run`/`auto`), those runs are
 measured accurately and written to `./runs` with an accuracy marker. `forecast` then **prefers
-them**: with ≥5 accurate runs it calibrates on real token counts and drops the floor caveat (point
+them**: with ≥5 accurate runs that carry a usable (>0) cost signal it calibrates on real token
+counts and drops the floor caveat (point
 it at a different dir with `--runs DIR`; the default `./runs` is relative to your current
 directory). Until then it's still a floor — and says so.
 
@@ -294,6 +295,11 @@ A config dir mirrors Agent Optimizer's layout: `metadata.yaml` (model, budget, m
 `instructions.md` (system-prompt append), `tools.json` (allowed/disallowed tools, MCP servers),
 and an optional `skills/` dir. Before any real spend the CLI prints a pre-flight cost estimate
 and asks you to confirm.
+
+> **Security note.** An eval set's `command` rule runs its `cmd` through the shell with your
+> user privileges (that's how it runs your real test suite). `eval init` can *draft* an eval set
+> with an LLM — treat that draft as untrusted and **read it before running**. File paths (task
+> ids, check paths) are confined to the sandbox; the shell command itself is not.
 
 `run` is the foundation; the full closed-loop optimizer is built on top of it — eval harness,
 cost-first ranking, failure-driven candidate generation, skills/MCP axes, and task decomposition,

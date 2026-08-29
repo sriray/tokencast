@@ -1,9 +1,9 @@
 """Combine deterministic checks + judge into a TaskScore; aggregate into an EvalReport."""
 import dataclasses
-import json
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from optimize import atomicio
 from optimize import checks as checks_mod
 from optimize import judge as judge_mod
 
@@ -41,9 +41,7 @@ class EvalReport:
         )
 
     def to_json(self, path):
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(dataclasses.asdict(self), fh, indent=2)
-        return path
+        return atomicio.dump_json(dataclasses.asdict(self), path)
 
 
 def score_task(task, run_result, cwd, judge=None):

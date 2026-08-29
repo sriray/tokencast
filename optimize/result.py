@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import tokencast
+from optimize import atomicio
 from optimize import pricing
 
 _BASE_EPOCH = 1_700_000_000  # fixed baseline so emitted timestamps are deterministic
@@ -60,6 +61,18 @@ class RunResult:
             provider_cost_usd=float(result.get("total_cost_usd", 0.0) or 0.0),
         )
 
+    def cost_reconciliation(self):
+        """(modeled_cost, provider_cost, relative_diff) for ROADMAP #1's accuracy check.
+
+        modeled_cost is cost_usd (accurate tokens x TokenCast list prices); provider_cost is
+        the SDK's own billed total. relative_diff is |modeled - provider| / provider, or None
+        when the SDK reported no cost. The acceptance target is ~<=15%.
+        """
+        if not self.provider_cost_usd:
+            return (self.cost_usd, 0.0, None)
+        rel = abs(self.cost_usd - self.provider_cost_usd) / self.provider_cost_usd
+        return (self.cost_usd, self.provider_cost_usd, rel)
+
     def _settlement_usage(self):
         """Sum authoritative per-model usage into one totals dict (single model per run)."""
         totals = {"input_tokens": 0, "output_tokens": 0,
@@ -110,7 +123,6 @@ class RunResult:
                                       "usage": dict(settle) if is_last else dict(zero)}})
         for ln in lines:
             ln["tokencast_accurate"] = True
-        with open(path, "w") as fh:
-            for ln in lines:
-                fh.write(json.dumps(ln) + "\n")
-        return path
+        # Atomic: a truncated run JSONL is silently read back by tokencast.py as a short,
+        # under-counted history that skews the forecast.
+        return atomicio.write_lines([json.dumps(ln) for ln in lines], path)

@@ -73,6 +73,11 @@ def cmd_run(args):
     print("=" * 60)
     print(f"Task {result.task_id} / config {result.config_id}")
     print(f"  Cost      {_fmt_cost(result.cost_usd)}  (accurate token counts)")
+    _modeled, provider, rel = result.cost_reconciliation()
+    if rel is not None:
+        flag = "  <-- >15% off; check the price table" if rel > 0.15 else ""
+        print(f"  Provider  {_fmt_cost(provider)} billed by the SDK; "
+              f"modeled is {rel * 100:.0f}% off{flag}")
     print(f"  Duration  {result.duration_ms / 1000:.1f}s   "
           f"Turns {result.num_turns}   Files {len(result.files_changed)}")
     print(f"  Log       {out_path}")
@@ -212,7 +217,8 @@ def cmd_optimize(args):
         total = p90 * n_tasks * n_cfgs * args.repeats
         print(f"Pre-flight: {n_cfgs} configs x {n_tasks} tasks x {args.repeats} repeats "
               f"(up to {n_generated} generated); est. total ~ {_fmt_cost(total)} "
-              f"(per-task p90, modeled at list prices)", file=sys.stderr)
+              f"(per-task p90, modeled at list prices -- a FLOOR; cap with --max-spend)",
+              file=sys.stderr)
     else:
         print(f"Pre-flight: only {hist_n} past sessions (<5); skipping forecast.",
               file=sys.stderr)
@@ -232,7 +238,8 @@ def cmd_optimize(args):
                           min_quality=args.min_quality, by=args.by, out_dir=args.out,
                           promote_to=args.promote, budget_remaining=budget_remaining,
                           need_tasks=args.need_tasks, n_generated=n_generated,
-                          skills_catalog=skills_catalog, mcp_catalog=mcp_catalog)
+                          skills_catalog=skills_catalog, mcp_catalog=mcp_catalog,
+                          max_spend=getattr(args, "max_spend", None))
     _print_optimize_result(result, args.out)
 
 
@@ -429,6 +436,8 @@ def main():
     o.add_argument("--model-sweep", action="store_true", help="add opus/sonnet/haiku variants")
     o.add_argument("--repeats", type=int, default=1, help="eval each config N times (median/p90)")
     o.add_argument("--min-quality", type=float, default=None, help="quality floor (default baseline)")
+    o.add_argument("--max-spend", type=float, default=None,
+                   help="hard ceiling on MEASURED $ spend; stop the fan-out once reached")
     o.add_argument("--by", choices=("cost", "time"), default="cost", help="optimize cost or time")
     o.add_argument("--out", default="./runs", help="output dir (logs + optimize.json + promoted/)")
     o.add_argument("--promote", default=None, help="also save the winner config to this dir")

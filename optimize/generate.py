@@ -2,6 +2,12 @@
 
 The default generator lazily uses the Agent SDK (excluded from unit coverage). The result is
 a DRAFT for human review -- generated rule checks are LLM-authored shell commands.
+
+SECURITY: a `command` rule runs its `cmd` string through the shell (`shell=True`) with your
+full user privileges during `eval`/`optimize`/`decompose`/`auto`. A generated -- or otherwise
+untrusted -- eval set can therefore execute arbitrary code. ALWAYS read a generated eval set
+before running it. Path fields (task id, check path) ARE confined to a safe component / the
+sandbox; the shell command itself is not, by design (it's how you run real test suites).
 """
 import json
 import os

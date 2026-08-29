@@ -63,6 +63,9 @@ def _family_best(j, fam):
         ic, oc = v.get("input_cost_per_token"), v.get("output_cost_per_token")
         if not isinstance(ic, (int, float)) or not isinstance(oc, (int, float)):
             continue
+        if ic <= 0 or oc <= 0:
+            continue  # a 0/negative rate (free preview entries exist) would price a whole
+                      # family at $0 and silently zero out every cost; keep the default instead
         if best is None or ic > best.get("input_cost_per_token", 0):
             best = v
     return best
@@ -123,19 +126,41 @@ def refresh_prices(verbose=True):
 
 
 def price_for(model):
-    m = (model or "").lower()
-    for key in PRICING:
-        if key in m:
-            return PRICING[key], key
+    m = (model if isinstance(model, str) else "").lower()  # non-string model id -> fallback
+    # If an id mentions more than one family, price by the one that appears FIRST in the
+    # id (e.g. a "claude-sonnet-..." id that happens to contain "opus" prices as Sonnet),
+    # not by PRICING's dict order, which could overcharge up to 5x.
+    matches = [(m.index(key), key) for key in PRICING if key in m]
+    if matches:
+        key = min(matches)[1]
+        return PRICING[key], key
     return PRICING["sonnet"], "sonnet?"  # fallback; flagged in output
+
+
+def _num(x):
+    """Token/count fields must be numbers; anything else (str, list, None, bool) -> 0.
+
+    Guards the parsers against a malformed JSONL value silently crashing (and thereby
+    dropping) an entire otherwise-valid session. Non-finite (inf/NaN -- json.loads accepts
+    bare Infinity/NaN) is rejected too, else one bad value makes every percentile inf/nan
+    (matches the browser tool's `num`, which already required isFinite).
+    """
+    return x if (isinstance(x, (int, float)) and not isinstance(x, bool)
+                 and math.isfinite(x)) else 0
+
+
+def _valid_cost(v):
+    """A usable explicit cost override: a finite, non-negative real (not a bool)."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and v >= 0)
 
 
 def entry_cost(usage, model):
     p, _ = price_for(model)
-    inp  = usage.get("input_tokens", 0) or 0
-    out  = usage.get("output_tokens", 0) or 0
-    cw   = usage.get("cache_creation_input_tokens", 0) or 0
-    cr   = usage.get("cache_read_input_tokens", 0) or 0
+    inp  = _num(usage.get("input_tokens"))
+    out  = _num(usage.get("output_tokens"))
+    cw   = _num(usage.get("cache_creation_input_tokens"))
+    cr   = _num(usage.get("cache_read_input_tokens"))
     return (inp * p["input"]
             + cw * p["input"] * CACHE_WRITE_MULT
             + cr * p["input"] * CACHE_READ_MULT
@@ -153,7 +178,30 @@ def _new_summary(session, project):
         "cost": 0.0, "input": 0, "output": 0, "cache_write": 0, "cache_read": 0,
         "assistant_turns": 0, "tool_calls": 0, "files": set(),
         "models": set(), "undercount_hits": 0, "accurate": False, "ts_first": None, "ts_last": None,
+        "_ep_first": None, "_ep_last": None,
     }
+
+
+def _track_ts(s, ts):
+    """Record first/last timestamps by CHRONOLOGICAL epoch, not lexical string order.
+
+    Keeps the raw string (budget slices ts_first[:10] for its period date) but decides
+    earliest/latest by parsed epoch -- robust to mixed tz offsets, naive vs aware, and
+    numeric-vs-string timestamps (which previously crashed min()/max()).
+    """
+    ep = _epoch(ts)
+    if ep is None:
+        return
+    if s["_ep_first"] is None or ep < s["_ep_first"]:
+        s["_ep_first"], s["ts_first"] = ep, ts
+    if s["_ep_last"] is None or ep > s["_ep_last"]:
+        s["_ep_last"], s["ts_last"] = ep, ts
+
+
+def _finalize_duration(s):
+    """Wall-clock minutes from the tracked epoch span (rough: includes idle/think time)."""
+    a, b = s["_ep_first"], s["_ep_last"]
+    s["duration_min"] = round((b - a) / 60.0, 1) if (a is not None and b is not None) else None
 
 
 def reduce_entries(entries, session, project):
@@ -167,28 +215,26 @@ def reduce_entries(entries, session, project):
             continue
         if e.get("tokencast_accurate") is True:
             s["accurate"] = True
-        ts = e.get("timestamp")
-        if ts:
-            s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
-            s["ts_last"]  = max(s["ts_last"], ts) if s["ts_last"] else ts
+        _track_ts(s, e.get("timestamp"))
         msg = e.get("message") or {}
         if e.get("type") == "assistant" or msg.get("role") == "assistant":
-            usage = msg.get("usage") or {}
+            usage = msg.get("usage")
+            usage = usage if isinstance(usage, dict) else {}
             model = msg.get("model") or e.get("model")
             if usage:
                 s["assistant_turns"] += 1
-                s["input"]       += usage.get("input_tokens", 0) or 0
-                s["output"]      += usage.get("output_tokens", 0) or 0
-                s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
-                s["cache_read"]  += usage.get("cache_read_input_tokens", 0) or 0
+                s["input"]       += _num(usage.get("input_tokens"))
+                s["output"]      += _num(usage.get("output_tokens"))
+                s["cache_write"] += _num(usage.get("cache_creation_input_tokens"))
+                s["cache_read"]  += _num(usage.get("cache_read_input_tokens"))
                 if model:
                     s["models"].add(model)
-                # Prefer an explicit cost field if the tool wrote one; else compute.
-                s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+                # Prefer an explicit cost field if the tool wrote a sane one; else compute.
+                s["cost"] += e.get("costUSD") if _valid_cost(e.get("costUSD")) \
                     else entry_cost(usage, model)
                 # Known Claude Code bug: input_tokens is a streaming placeholder,
                 # often 0/1 while real input lives in the cache fields.
-                if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+                if _num(usage.get("output_tokens")) > 0 and _num(usage.get("input_tokens")) <= 1:
                     s["undercount_hits"] += 1
             # tool calls + files touched, from content blocks
             content = msg.get("content")
@@ -202,14 +248,16 @@ def reduce_entries(entries, session, project):
                             if fp:
                                 s["files"].add(fp)
     s["files_touched"] = len(s["files"])
-    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    _finalize_duration(s)
     return s
 
 
 def _read_entries(path):
     """Read a JSONL transcript into a list of parsed dicts, skipping unparseable lines."""
     entries = []
-    with open(path, "r", errors="ignore") as fh:
+    # utf-8-sig strips a leading BOM (else json.loads chokes on the first line and the
+    # whole session is silently dropped); errors="ignore" tolerates stray bad bytes.
+    with open(path, "r", encoding="utf-8-sig", errors="ignore") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -232,11 +280,16 @@ def parse_session(path):
 # Segmentation (ROADMAP #2): split one transcript into task-sized units.
 # --------------------------------------------------------------------------------------
 def _epoch(ts):
+    """Parse a timestamp to a UTC epoch (seconds). Naive timestamps are treated as UTC
+    so the result is deterministic (not dependent on the host timezone). None on failure."""
     import datetime
     try:
-        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
-    except Exception:
+        dt = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
 
 
 def _has_usage(entry):
@@ -305,18 +358,6 @@ def parse_session_segments(path, gap_min=30, split_on_user=False):
         for i, s in enumerate(kept, 1):
             s["session"] = f"{base}#{i}"
     return kept
-
-
-def _duration_min(t0, t1):
-    """Wall-clock minutes between first and last event (rough: includes idle/think time)."""
-    import datetime
-    def ep(t):
-        try:
-            return datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            return None
-    a, b = (ep(t0) if t0 else None), (ep(t1) if t1 else None)
-    return round((b - a) / 60.0, 1) if (a is not None and b is not None and b >= a) else None
 
 
 def load(root):
@@ -416,22 +457,19 @@ def _read_generic(path):
             continue
         saw_msg = True
         model = e.get("model")
-        ts = e.get("timestamp")
-        if ts:
-            s["ts_first"] = min(s["ts_first"], ts) if s["ts_first"] else ts
-            s["ts_last"] = max(s["ts_last"], ts) if s["ts_last"] else ts
+        _track_ts(s, e.get("timestamp"))
         s["assistant_turns"] += 1
-        s["input"] += usage.get("input_tokens", 0) or 0
-        s["output"] += usage.get("output_tokens", 0) or 0
-        s["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
-        s["cache_read"] += usage.get("cache_read_input_tokens", 0) or 0
+        s["input"] += _num(usage.get("input_tokens"))
+        s["output"] += _num(usage.get("output_tokens"))
+        s["cache_write"] += _num(usage.get("cache_creation_input_tokens"))
+        s["cache_read"] += _num(usage.get("cache_read_input_tokens"))
         if model:
             s["models"].add(model)
-        s["cost"] += e.get("costUSD") if isinstance(e.get("costUSD"), (int, float)) \
+        s["cost"] += e.get("costUSD") if _valid_cost(e.get("costUSD")) \
             else entry_cost(usage, model)
         # Same input-token undercount honesty as Claude Code: a placeholder input_tokens
         # alongside real output counts as a suspect entry.
-        if (usage.get("output_tokens", 0) or 0) > 0 and (usage.get("input_tokens", 0) or 0) <= 1:
+        if _num(usage.get("output_tokens")) > 0 and _num(usage.get("input_tokens")) <= 1:
             s["undercount_hits"] += 1
         tools = e.get("tools")
         if isinstance(tools, list):
@@ -446,7 +484,7 @@ def _read_generic(path):
     if not saw_msg:
         return []
     s["files_touched"] = len(s["files"])
-    s["duration_min"] = _duration_min(s["ts_first"], s["ts_last"])
+    _finalize_duration(s)
     return [s]
 
 
@@ -494,16 +532,32 @@ def read_file(path, fmt="auto"):
     """Read ONE log file into session summaries using the chosen (or auto-detected) reader.
 
     Never raises on a foreign/empty file: returns []. The loader filters assistant_turns==0.
+    In auto mode, if the sniffed reader extracts no assistant turns from a non-empty file,
+    fall back to the other readers -- so an ambiguous envelope, or a generic file whose
+    first lines are headers, isn't silently read as $0 by the wrong reader.
     """
-    name = _sniff_format(path) if fmt == "auto" else fmt
-    reader = READERS.get(name)
-    if reader is None:
-        return []
-    try:
-        return reader[0](path) or []
-    except Exception as ex:
-        print(f"  ! skipped {path}: {ex}", file=sys.stderr)
-        return []
+    if fmt != "auto":
+        reader = READERS.get(fmt)
+        if reader is None:
+            return []
+        try:
+            return reader[0](path) or []
+        except Exception as ex:
+            print(f"  ! skipped {path}: {ex}", file=sys.stderr)
+            return []
+    primary = _sniff_format(path)
+    order = [primary] + [n for n in READERS if n != primary]
+    fallback = []
+    for name in order:
+        try:
+            sessions = READERS[name][0](path) or []
+        except Exception as ex:
+            print(f"  ! skipped {path} via {name}: {ex}", file=sys.stderr)
+            sessions = []
+        if any(s.get("assistant_turns", 0) > 0 for s in sessions):
+            return sessions
+        fallback = fallback or sessions
+    return fallback
 
 
 def load_with_format(root, fmt="auto"):
@@ -542,6 +596,7 @@ def money(x):
 # Commands
 # --------------------------------------------------------------------------------------
 def cmd_report(args):
+    _validate_sizes(args)
     segment = getattr(args, "segment", False)
     fmt = getattr(args, "format", "auto")
     if segment:
@@ -556,14 +611,12 @@ def cmd_report(args):
         return
     total = sum(s["cost"] for s in sessions)
     costs = [s["cost"] for s in sessions]
-    by_proj, by_model, by_day = defaultdict(float), defaultdict(float), defaultdict(float)
+    by_proj, by_model = defaultdict(float), defaultdict(float)
     fallback = 0
     for s in sessions:
         by_proj[s["project"]] += s["cost"]
         for m in (s["models"] or {"unknown"}):
             by_model[m] += s["cost"] / max(1, len(s["models"]))
-        if s["ts_first"]:
-            by_day[s["ts_first"][:10]] += s["cost"]
         if not s["models"]:
             fallback += 1
 
@@ -638,20 +691,61 @@ def _dedup_sessions(sessions):
         if key not in by_key:
             by_key[key] = s
             order.append(key)
-        elif s.get("accurate") and not by_key[key].get("accurate"):
+        elif (s.get("accurate") and s.get("cost", 0) > 0
+              and not by_key[key].get("accurate")):
+            # Prefer an accurate copy ONLY when it carries a usable cost signal: a failed
+            # harness run is stamped accurate=True at $0, and must not evict a real floor
+            # ($X) copy of the same session (which would silently undercount the floor pool).
             by_key[key] = s
     return [by_key[k] for k in order]
 
 
-def _validate_sizes(args):
-    """Reject negative size inputs before they reach log1p (which crashes on < 0).
+def _accurate_basis(pool):
+    """Pick the calibration basis: the accurate runs that carry a usable (>0) cost signal
+    when >=5 exist, else the full pool (a FLOOR).
 
-    Mirrors the inline-hint guard so the CLI flags can't sneak a negative through.
+    Gating on SIGNAL, not just count, is the point: an accurate harness run that errored or
+    produced no model usage is stamped accurate=True at $0 (see optimize/result.py). >=5 such
+    runs would otherwise flip to a 'calibrated' basis and report a confident $0.00 with the
+    floor caveat dropped -- inverting the tool's loudest promise. Used by both cmd_forecast
+    and cmd_estimate so the two stay in lock-step.
     """
-    for name in ("files", "tools", "output", "count"):
+    usable = [s for s in pool if s.get("accurate") and s.get("cost", 0) > 0]
+    return (usable, True) if len(usable) >= 5 else (pool, False)
+
+
+_MAX_COUNT = 100_000  # sprint/project sanity bound (caps Monte-Carlo work, prevents hangs)
+
+
+def _validate_sizes(args):
+    """Reject negative / non-finite / absurd numeric inputs before they reach log1p,
+    the Monte-Carlo draw count, or the cost math -- where they crash or print nonsense.
+
+    Covers every numeric knob across forecast/report/estimate/budget; the int-typed flags
+    can't be NaN but the float ones (--cap/--per-task/--forecast) can, so check finiteness.
+    """
+    for name in ("files", "tools", "output", "count", "gap_min", "cap",
+                 "per_task", "forecast"):
         v = getattr(args, name, None)
-        if v is not None and v < 0:
-            raise SystemExit(f"tokencast: --{name} must be >= 0, got {v}")
+        if v is None:
+            continue
+        flag = "--" + name.replace("_", "-")
+        if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or (isinstance(v, float) and not math.isfinite(v)):
+            raise SystemExit(f"tokencast: {flag} must be a finite number, got {v!r}")
+        if v < 0:
+            raise SystemExit(f"tokencast: {flag} must be >= 0, got {v}")
+    count = getattr(args, "count", None)
+    if count is not None and count > _MAX_COUNT:
+        raise SystemExit(f"tokencast: --count must be <= {_MAX_COUNT:,}, got {count:,}")
+
+
+def _mc_trials(n_per_trial):
+    """Monte-Carlo trial count, bounded so total draws stay near 5M: keeps the usual 5000
+    trials for ordinary sprints/plans but scales down for pathological sizes (no hang)."""
+    if n_per_trial <= 0:
+        return 0
+    return max(200, min(5000, 5_000_000 // n_per_trial))
 
 
 # --------------------------------------------------------------------------------------
@@ -674,6 +768,8 @@ def _forecast_features():
 def _scale(value, feature):
     """Per-feature coordinate transform: log1p for skewed features, identity otherwise."""
     v = value or 0
+    if v < 0:
+        v = 0  # a negative token/count is malformed; clamp so log1p doesn't ValueError
     return math.log1p(v) if feature in _LOG_FEATURES else float(v)
 
 
@@ -692,7 +788,16 @@ def _neighbor_weights(distances):
 
 
 def _weighted_pct(values, weights, q):
-    """Distance-weighted percentile. Reduces to pct() when all weights are equal."""
+    """Distance-weighted percentile. Reduces EXACTLY to pct() when all weights are equal.
+
+    Symmetric type-7 plotting positions: position(i) uses the inclusive cumulative weight
+    minus half of point i's own weight minus half the first point's weight, normalized so
+    positions[0]==0 and positions[-1]==1. Unlike the old `total - weights[-1]` form, every
+    weight -- including the largest point's -- shifts the interior positions, so a far
+    (low-weight) neighbor is genuinely down-weighted instead of ignored. (With only two
+    points there is no interior, so the result is weight-independent -- inherent to
+    interpolating a percentile between exactly two samples.)
+    """
     if not values:
         return 0.0
     pairs = sorted(zip(values, weights), key=lambda vw: vw[0])
@@ -704,19 +809,15 @@ def _weighted_pct(values, weights, q):
     total = sum(ws)
     if total <= 0:
         return pct(values, q)
-    # Weighted plotting positions that generalize pct()'s (n-1)*q convention:
-    # position(i) = (cumulative weight strictly before i) + (w_i - 1)/... -> use the
-    # cumulative *interior* weight so equal weights give exactly i/(n-1).
-    # p_i = (C_i - w_i) / (total - w_last_avg) is fragile; instead place each point at
-    # the cumulative weight of the *preceding* points, scaled to [0, 1].
-    cum, pre = [], 0.0
+    cum, run = [], 0.0
     for w in ws:
-        cum.append(pre)
-        pre += w
-    span = total - ws[-1]  # weight mass strictly before the last point
-    if span <= 0:
-        return xs[-1]
-    positions = [c / span for c in cum]  # positions[0]=0, positions[-1]=1
+        run += w
+        cum.append(run)  # inclusive cumulative weight up to and including i
+    half0, halfN = ws[0] / 2.0, ws[-1] / 2.0
+    denom = total - half0 - halfN
+    if denom <= 0:
+        return pct(values, q)
+    positions = [(c - w / 2.0 - half0) / denom for c, w in zip(cum, ws)]
     if q <= positions[0]:
         return xs[0]
     if q >= positions[-1]:
@@ -783,8 +884,7 @@ def cmd_forecast(args):
     else:
         loaded = load(args.path) + load(runs)  # default/auto == today's behavior
     pool = _dedup_sessions(loaded)
-    accurate = [s for s in pool if s.get("accurate")]
-    sessions, accurate_basis = (accurate, True) if len(accurate) >= 5 else (pool, False)
+    sessions, accurate_basis = _accurate_basis(pool)
     if len(sessions) < 5:
         print("Need at least ~5 historical sessions to calibrate a forecast.")
         return
@@ -841,7 +941,7 @@ def cmd_forecast(args):
     if args.count and args.count > 1:
         import random
         random.seed(0)
-        TRIALS = 5000
+        TRIALS = _mc_trials(args.count)
         totals_c, totals_t = [], []
         for _ in range(TRIALS):
             c = sum(random.choices(ncosts, weights=cweights, k=args.count))
@@ -876,6 +976,13 @@ PlanTicket = namedtuple("PlanTicket", ["text", "files", "tools", "output"])
 # checkboxes) or an ordered-list marker (1. / 2) ). Headings, blanks, prose are ignored.
 _BULLET_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+(.*)$")
 _CHECKBOX_RE = re.compile(r"^\[[ xX]\]\s+(.*)$")
+
+
+def _is_thematic_break(s):
+    """A markdown horizontal rule: 3+ of the same -, *, or _ with optional spaces. The
+    SPACED forms ('- - -', '* * *') otherwise match _BULLET_RE and count as junk tickets."""
+    t = s.replace(" ", "").replace("\t", "")
+    return len(t) >= 3 and t[0] in "-*_" and t == t[0] * len(t)
 # Trailing parenthesised size hint, e.g. "(files=8 tools=30 output=4000)".
 _HINT_RE = re.compile(r"\s*\(([^()]*)\)\s*$")
 
@@ -920,7 +1027,22 @@ def parse_plan(text):
     from the ticket text. See the module-level rule + the design spec.
     """
     tickets = []
+    in_fence, fence = False, None
     for raw in text.splitlines():
+        stripped = raw.lstrip()
+        # Skip fenced code blocks (``` or ~~~) so a pasted shell/diff snippet whose lines
+        # start with '-' doesn't get counted as tickets and inflate the sprint total.
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence, fence = True, marker
+            elif stripped.startswith(fence):
+                in_fence, fence = False, None
+            continue
+        if in_fence:
+            continue
+        if _is_thematic_break(stripped):
+            continue  # a '- - -' / '* * *' separator is not a ticket
         m = _BULLET_RE.match(raw)
         if not m:
             continue
@@ -948,8 +1070,7 @@ def _estimate_pool(args):
     else:
         loaded = load(args.path) + load(getattr(args, "runs", "./runs"))
     pool = _dedup_sessions(loaded)
-    accurate = [s for s in pool if s.get("accurate")]
-    return (accurate, True) if len(accurate) >= 5 else (pool, False)
+    return _accurate_basis(pool)
 
 
 def cmd_estimate(args):
@@ -1039,7 +1160,7 @@ def cmd_estimate(args):
     # Monte-Carlo roll-up over the union of matched draws, len(tickets) draws per trial.
     if len(tickets) > 1 and mc_costs:
         random.seed(0)
-        TRIALS = 5000
+        TRIALS = _mc_trials(len(tickets))
         totals_c, totals_t = [], []
         for _ in range(TRIALS):
             totals_c.append(sum(random.choices(mc_costs, weights=mc_cweights, k=len(tickets))))
@@ -1064,6 +1185,7 @@ def cmd_estimate(args):
 
 
 def cmd_budget(args):
+    _validate_sizes(args)
     import budget  # lazy import avoids a tokencast<->budget cycle
     import datetime
     cfg = budget.BudgetConfig.load(args.config)
@@ -1145,7 +1267,9 @@ def cmd_demo(args):
                                              "cache_read_input_tokens": cache_read}}}
                 fh.write(json.dumps(rec) + "\n")
     print(f"Wrote {args.sessions} synthetic sessions to {out}/demo-project/")
-    print(f"Now run:  python {os.path.basename(__file__)} report {out}")
+    prog = os.path.basename(sys.argv[0] or "")
+    invoke = prog if prog and not prog.endswith(".py") else f"python {os.path.basename(__file__)}"
+    print(f"Now run:  {invoke} report {out}")
 
 
 def _iso(epoch):

@@ -3,9 +3,21 @@
 A unified dimension model: each Dimension has a weight and is scored EITHER by rule checks
 OR by an LLM judge rubric (exactly one).
 """
+import os
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+
+def _safe_component(value, label):
+    """Reject a value that isn't a safe single path component. Task ids (and config ids)
+    flow into output paths like out_dir/<id>-<config>.jsonl; an id of '../../etc/x', an
+    absolute path, or an empty string (which collapses the path) would escape/alias out_dir.
+    Eval sets can be LLM-generated, so this input is partially untrusted."""
+    if not value or value in (".", "..") or value != os.path.basename(value) or os.path.isabs(value):
+        raise ValueError(
+            f"{label} {value!r} must be a safe path component (no '/', '..', or absolute path)")
+    return value
 
 try:
     import yaml
@@ -35,9 +47,13 @@ class Check:
             raise ValueError(f"{kind} check requires 'path'")
         if kind == "file_contains" and not d.get("pattern"):
             raise ValueError("file_contains check requires 'pattern'")
+        timeout = int(d.get("timeout", 120))
+        if timeout <= 0:
+            # timeout=0 makes communicate(timeout=0) fire immediately, so the check can never
+            # pass -- a required command rule with it would fail the task unconditionally.
+            raise ValueError(f"{kind} check: timeout must be > 0 seconds, got {timeout}")
         return cls(kind=kind, cmd=d.get("cmd"), expect_exit=int(d.get("expect_exit", 0)),
-                   path=d.get("path"), pattern=d.get("pattern"),
-                   timeout=int(d.get("timeout", 120)))
+                   path=d.get("path"), pattern=d.get("pattern"), timeout=timeout)
 
     def to_dict(self):
         out = {"kind": self.kind}
@@ -118,6 +134,7 @@ class EvalTask:
     def from_dict(cls, d):
         if not d.get("id"):
             raise ValueError("task requires 'id'")
+        _safe_component(d["id"], "task id")
         if not d.get("prompt"):
             raise ValueError(f"task {d.get('id')!r} requires 'prompt'")
         if d.get("seed_dir") and d.get("seed_repo"):
@@ -131,7 +148,11 @@ class EvalTask:
             raise ValueError(
                 f"task {d['id']!r}: pass_threshold must be between 0 and 1, got {threshold}")
         dims = [Dimension.from_dict(x) for x in (d.get("dimensions") or [])]
-        if dims and sum(dim.weight for dim in dims) == 0:
+        if not dims:
+            # A task with no dimensions scores composite 0.0 with required_ok=all([])=True,
+            # so pass_threshold 0.0 would silently "pass" a config that did nothing.
+            raise ValueError(f"task {d['id']!r}: requires at least one dimension")
+        if sum(dim.weight for dim in dims) == 0:
             raise ValueError(f"task {d['id']!r}: dimension weights sum to 0")
         return cls(id=d["id"], prompt=d["prompt"], pass_threshold=threshold,
                    dimensions=dims, seed_dir=d.get("seed_dir"), seed_repo=seed_repo)
